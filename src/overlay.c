@@ -1,4 +1,5 @@
 #include "overlay.h"
+#include "strutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,16 +66,6 @@ static void draw_rect_alpha(int x0, int y0, int w, int h,
             fb_mem[y * fb_stride + x] = blend565(bg, color, alpha);
         }
     }
-}
-
-/* Measure text width in pixels (at 1x scale) */
-static int measure_text(const char *str) {
-    int w = 0;
-    while (*str) {
-        w += 8; /* fixed-width 8px per char */
-        str++;
-    }
-    return w;
 }
 
 /* Draw a single character at given position. Returns advance. */
@@ -261,7 +252,7 @@ int overlay_init(void) {
 
 void overlay_set_text(const char *text, int duration_secs) {
     if (text) {
-        snprintf(banner_text, sizeof(banner_text), "%s", text);
+        str_copy_trunc(banner_text, sizeof(banner_text), text);
     } else {
         banner_text[0] = '\0';
     }

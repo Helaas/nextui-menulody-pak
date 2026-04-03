@@ -6,6 +6,7 @@
 #include "overlay.h"
 #include "config.h"
 #include "hooks.h"
+#include "strutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,8 +82,8 @@ static void update_status(void) {
         .track_count = playlist.count,
         .volume      = config.volume,
     };
-    if (name) strncpy(st.track_name, name, sizeof(st.track_name) - 1);
-    strncpy(st.playlist_name, playlist.name, sizeof(st.playlist_name) - 1);
+    if (name) str_copy_trunc(st.track_name, sizeof(st.track_name), name);
+    str_copy_trunc(st.playlist_name, sizeof(st.playlist_name), playlist.name);
     ipc_daemon_write_status(&st);
 }
 
@@ -102,8 +103,9 @@ static int daemonize(void) {
     config_get_data_dir(data_dir, sizeof(data_dir));
     mkdir(data_dir, 0755);
     char log_path[CONFIG_MAX_PATH];
-    snprintf(log_path, sizeof(log_path), "%s/daemon.log", data_dir);
-    FILE *log_f = freopen(log_path, "a", stderr);
+    FILE *log_f = NULL;
+    if (path_join(log_path, sizeof(log_path), data_dir, "daemon.log") == 0)
+        log_f = freopen(log_path, "a", stderr);
     if (!log_f) freopen("/dev/null", "w", stderr);
 
     return 0;

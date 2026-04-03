@@ -1,5 +1,6 @@
 #include "playlist.h"
 #include "cJSON.h"
+#include "strutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +53,7 @@ static void shuffle_order(int *arr, int n) {
 
 static void mkdirp(const char *path) {
     char tmp[CONFIG_MAX_PATH];
-    snprintf(tmp, sizeof(tmp), "%s", path);
+    str_copy_trunc(tmp, sizeof(tmp), path);
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = '\0';
@@ -74,7 +75,8 @@ static int scan_dir_recursive(const char *dir, char ***paths_out, int *count, in
         if (ent->d_name[0] == '.') continue;
 
         char path[CONFIG_MAX_PATH];
-        snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name);
+        if (path_join(path, sizeof(path), dir, ent->d_name) != 0)
+            continue;
 
         struct stat st;
         if (stat(path, &st) != 0) continue;
@@ -257,7 +259,12 @@ void playlist_repeat_cycle(playlist_t *pl) {
 static void get_playlist_path(const char *name, char *out, int size) {
     char dir[CONFIG_MAX_PATH];
     config_get_playlists_dir(dir, sizeof(dir));
-    snprintf(out, size, "%s/%s.json", dir, name);
+    if (size > 0) {
+        if (path_join(out, (size_t)size, dir, name) != 0 ||
+            str_append(out, (size_t)size, ".json") != 0) {
+            out[0] = '\0';
+        }
+    }
 }
 
 int playlist_list_saved(char ***out_names, int *out_count) {
@@ -300,10 +307,11 @@ int playlist_list_saved(char ***out_names, int *out_count) {
 
 int playlist_named_load(const char *name, named_playlist_t *pl) {
     memset(pl, 0, sizeof(*pl));
-    snprintf(pl->name, sizeof(pl->name), "%s", name);
+    str_copy_trunc(pl->name, sizeof(pl->name), name);
 
     char path[CONFIG_MAX_PATH];
     get_playlist_path(name, path, sizeof(path));
+    if (!path[0]) return -1;
 
     FILE *f = fopen(path, "r");
     if (!f) return -1;
@@ -325,7 +333,7 @@ int playlist_named_load(const char *name, named_playlist_t *pl) {
 
     cJSON *name_item = cJSON_GetObjectItem(root, "name");
     if (cJSON_IsString(name_item))
-        snprintf(pl->name, sizeof(pl->name), "%s", cJSON_GetStringValue(name_item));
+        str_copy_trunc(pl->name, sizeof(pl->name), cJSON_GetStringValue(name_item));
 
     cJSON *tracks = cJSON_GetObjectItem(root, "tracks");
     if (cJSON_IsArray(tracks)) {
@@ -353,6 +361,7 @@ int playlist_named_save(const named_playlist_t *pl) {
 
     char path[CONFIG_MAX_PATH];
     get_playlist_path(pl->name, path, sizeof(path));
+    if (!path[0]) return -1;
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return -1;
@@ -369,7 +378,11 @@ int playlist_named_save(const named_playlist_t *pl) {
 
     /* Atomic write */
     char tmp_path[CONFIG_MAX_PATH];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    str_copy_trunc(tmp_path, sizeof(tmp_path), path);
+    if (str_append(tmp_path, sizeof(tmp_path), ".tmp") != 0) {
+        free(json);
+        return -1;
+    }
     FILE *f = fopen(tmp_path, "w");
     if (!f) { free(json); return -1; }
     fputs(json, f);
@@ -403,7 +416,7 @@ int playlist_load_named(playlist_t *pl, const char *name) {
 
     playlist_free(pl);
     memset(pl, 0, sizeof(*pl));
-    snprintf(pl->name, sizeof(pl->name), "%s", named.name);
+    str_copy_trunc(pl->name, sizeof(pl->name), named.name);
 
     if (named.count == 0) {
         playlist_named_free(&named);

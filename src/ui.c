@@ -6,6 +6,7 @@
 #include "config.h"
 #include "playlist.h"
 #include "hooks.h"
+#include "strutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +40,7 @@ static void show_now_playing(void) {
 
         char title[300];
         if (st.track_name[0])
-            snprintf(title, sizeof(title), "%s", st.track_name);
+            str_copy_trunc(title, sizeof(title), st.track_name);
         else
             snprintf(title, sizeof(title), "No track");
 
@@ -202,7 +203,9 @@ static void show_create_playlist(void) {
     }
 
     char header[128];
-    snprintf(header, sizeof(header), "Select tracks for \"%s\"", kb_result.text);
+    snprintf(header, sizeof(header), "Select tracks for \"%.*s\"",
+             (int)(sizeof(header) - sizeof("Select tracks for \"\"")),
+             kb_result.text);
 
     for (;;) {
         ap_footer_item footer[] = {
@@ -234,7 +237,7 @@ static void show_create_playlist(void) {
 
                 if (sel_count > 0) {
                     named_playlist_t named = {0};
-                    snprintf(named.name, sizeof(named.name), "%s", kb_result.text);
+                    str_copy_trunc(named.name, sizeof(named.name), kb_result.text);
                     named.tracks = calloc(sel_count, sizeof(char *));
                     if (named.tracks) {
                         for (int i = 0; i < lib.count; i++) {
@@ -379,8 +382,9 @@ static void show_playlists(void) {
                        && result.selected_index >= 2) {
                 /* Delete playlist */
                 char msg_text[256];
-                snprintf(msg_text, sizeof(msg_text),
-                         "Delete playlist \"%s\"?", names[result.selected_index - 2]);
+                snprintf(msg_text, sizeof(msg_text), "Delete playlist \"%.*s\"?",
+                         (int)(sizeof(msg_text) - sizeof("Delete playlist \"\"?")),
+                         names[result.selected_index - 2]);
                 ap_message_opts msg = {.message = msg_text};
                 ap_confirm_result cresult;
                 if (ap_confirmation(&msg, &cresult) == AP_OK) {
@@ -434,8 +438,8 @@ static void show_music_folders(config_t *cfg) {
                     fp_opts.mode = AP_FILE_PICKER_DIRS;
                     ap_file_picker_result fp_result;
                     if (ap_file_picker(&fp_opts, &fp_result) == AP_OK) {
-                        snprintf(cfg->music_dirs[cfg->music_dir_count], CONFIG_MAX_PATH,
-                                 "%s", fp_result.path);
+                        str_copy_trunc(cfg->music_dirs[cfg->music_dir_count], CONFIG_MAX_PATH,
+                                       fp_result.path);
                         cfg->music_dir_count++;
                         config_save(cfg);
                         /* Tell daemon to rescan */
@@ -448,7 +452,8 @@ static void show_music_folders(config_t *cfg) {
                 /* Remove folder */
                 if (cfg->music_dir_count > 1) {
                     for (int i = result.selected_index; i < cfg->music_dir_count - 1; i++) {
-                        snprintf(cfg->music_dirs[i], CONFIG_MAX_PATH, "%s", cfg->music_dirs[i + 1]);
+                        str_copy_trunc(cfg->music_dirs[i], CONFIG_MAX_PATH,
+                                       cfg->music_dirs[i + 1]);
                     }
                     cfg->music_dir_count--;
                     config_save(cfg);
@@ -548,7 +553,7 @@ void run_app(void) {
 
         char now_playing_hint[128];
         if (st.track_name[0]) {
-            snprintf(now_playing_hint, sizeof(now_playing_hint), "%s", st.track_name);
+            str_copy_trunc(now_playing_hint, sizeof(now_playing_hint), st.track_name);
         } else {
             snprintf(now_playing_hint, sizeof(now_playing_hint), "Not playing");
         }

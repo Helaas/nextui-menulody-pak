@@ -1,5 +1,6 @@
 #include "config.h"
 #include "cJSON.h"
+#include "strutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,30 +14,42 @@
 static void get_shared_userdata(char *out, int size) {
     const char *p = getenv("SHARED_USERDATA_PATH");
     if (p) {
-        snprintf(out, size, "%s", p);
+        str_copy_trunc(out, (size_t)size, p);
         return;
     }
 #ifndef PLATFORM_MAC
     const char *sd = getenv("SDCARD_PATH");
     if (!sd) sd = "/mnt/SDCARD";
-    snprintf(out, size, "%s/.userdata/shared", sd);
+    if (size > 0) {
+        if (path_join(out, (size_t)size, sd, ".userdata") != 0 ||
+            str_append(out, (size_t)size, "/shared") != 0) {
+            out[0] = '\0';
+        }
+    }
 #else
     const char *home = getenv("HOME");
     if (!home) home = "/tmp";
-    snprintf(out, size, "%s/.userdata/shared", home);
+    if (size > 0) {
+        if (path_join(out, (size_t)size, home, ".userdata") != 0 ||
+            str_append(out, (size_t)size, "/shared") != 0) {
+            out[0] = '\0';
+        }
+    }
 #endif
 }
 
 void config_get_data_dir(char *out, int size) {
     char shared[CONFIG_MAX_PATH];
     get_shared_userdata(shared, sizeof(shared));
-    snprintf(out, size, "%s/Menulody", shared);
+    if (size > 0 && (!shared[0] || path_join(out, (size_t)size, shared, "Menulody") != 0))
+        out[0] = '\0';
 }
 
 void config_get_playlists_dir(char *out, int size) {
     char data[CONFIG_MAX_PATH];
     config_get_data_dir(data, sizeof(data));
-    snprintf(out, size, "%s/playlists", data);
+    if (size > 0 && (!data[0] || path_join(out, (size_t)size, data, "playlists") != 0))
+        out[0] = '\0';
 }
 
 const char *config_default_music_dir(void) {
@@ -44,7 +57,8 @@ const char *config_default_music_dir(void) {
     static char buf[CONFIG_MAX_PATH];
     const char *home = getenv("HOME");
     if (!home) home = "/tmp";
-    snprintf(buf, sizeof(buf), "%s/Music", home);
+    if (path_join(buf, sizeof(buf), home, "Music") != 0)
+        buf[0] = '\0';
     return buf;
 #else
     return "/mnt/SDCARD/Music";
@@ -53,7 +67,7 @@ const char *config_default_music_dir(void) {
 
 static void mkdirp(const char *path) {
     char tmp[CONFIG_MAX_PATH];
-    snprintf(tmp, sizeof(tmp), "%s", path);
+    str_copy_trunc(tmp, sizeof(tmp), path);
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = '\0';
@@ -68,7 +82,7 @@ static void mkdirp(const char *path) {
 
 static config_t default_config(void) {
     config_t cfg = {0};
-    snprintf(cfg.music_dirs[0], CONFIG_MAX_PATH, "%s", config_default_music_dir());
+    str_copy_trunc(cfg.music_dirs[0], CONFIG_MAX_PATH, config_default_music_dir());
     cfg.music_dir_count = 1;
     cfg.shuffle = false;
     cfg.repeat = REPEAT_OFF;
@@ -85,7 +99,8 @@ config_t config_load(void) {
     char data_dir[CONFIG_MAX_PATH];
     config_get_data_dir(data_dir, sizeof(data_dir));
     char path[CONFIG_MAX_PATH];
-    snprintf(path, sizeof(path), "%s/settings.json", data_dir);
+    if (path_join(path, sizeof(path), data_dir, "settings.json") != 0)
+        return cfg;
 
     FILE *f = fopen(path, "r");
     if (!f) return cfg;
@@ -111,8 +126,8 @@ config_t config_load(void) {
         cJSON *item;
         cJSON_ArrayForEach(item, dirs) {
             if (cJSON_IsString(item) && cfg.music_dir_count < CONFIG_MAX_MUSIC_DIRS) {
-                snprintf(cfg.music_dirs[cfg.music_dir_count], CONFIG_MAX_PATH,
-                         "%s", cJSON_GetStringValue(item));
+                str_copy_trunc(cfg.music_dirs[cfg.music_dir_count], CONFIG_MAX_PATH,
+                               cJSON_GetStringValue(item));
                 cfg.music_dir_count++;
             }
         }
@@ -150,7 +165,8 @@ int config_save(const config_t *cfg) {
     mkdirp(data_dir);
 
     char path[CONFIG_MAX_PATH];
-    snprintf(path, sizeof(path), "%s/settings.json", data_dir);
+    if (path_join(path, sizeof(path), data_dir, "settings.json") != 0)
+        return -1;
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return -1;
@@ -180,7 +196,11 @@ int config_save(const config_t *cfg) {
 
     /* Atomic write: write to tmp then rename */
     char tmp_path[CONFIG_MAX_PATH];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    str_copy_trunc(tmp_path, sizeof(tmp_path), path);
+    if (str_append(tmp_path, sizeof(tmp_path), ".tmp") != 0) {
+        free(json);
+        return -1;
+    }
 
     FILE *f = fopen(tmp_path, "w");
     if (!f) { free(json); return -1; }

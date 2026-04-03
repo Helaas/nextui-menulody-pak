@@ -1,4 +1,5 @@
 #include "ipc.h"
+#include "strutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,12 +75,12 @@ ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size)
     }
     if (strncmp(buf, "PLAYLIST ", 9) == 0) {
         if (out_str_arg && str_arg_size > 0)
-            snprintf(out_str_arg, str_arg_size, "%s", buf + 9);
+            str_copy_trunc(out_str_arg, (size_t)str_arg_size, buf + 9);
         return IPC_CMD_PLAYLIST;
     }
     if (strncmp(buf, "PREVIEW ", 8) == 0) {
         if (out_str_arg && str_arg_size > 0)
-            snprintf(out_str_arg, str_arg_size, "%s", buf + 8);
+            str_copy_trunc(out_str_arg, (size_t)str_arg_size, buf + 8);
         return IPC_CMD_PREVIEW;
     }
 
@@ -186,11 +187,11 @@ int ipc_client_read_status(ipc_status_t *st) {
         if (sscanf(line, "track_count=%d", &st->track_count) == 1) continue;
         if (sscanf(line, "volume=%d", &st->volume) == 1) continue;
         if (strncmp(line, "track_name=", 11) == 0) {
-            snprintf(st->track_name, sizeof(st->track_name), "%s", line + 11);
+            str_copy_trunc(st->track_name, sizeof(st->track_name), line + 11);
             continue;
         }
         if (strncmp(line, "playlist=", 9) == 0) {
-            snprintf(st->playlist_name, sizeof(st->playlist_name), "%s", line + 9);
+            str_copy_trunc(st->playlist_name, sizeof(st->playlist_name), line + 9);
             continue;
         }
     }

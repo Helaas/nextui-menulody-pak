@@ -1,5 +1,6 @@
 #include "hooks.h"
 #include "config.h"
+#include "strutil.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +16,7 @@
 static void get_userdata_path(char *out, int size) {
     const char *p = getenv("USERDATA_PATH");
     if (p) {
-        snprintf(out, size, "%s", p);
+        str_copy_trunc(out, (size_t)size, p);
         return;
     }
 #ifndef PLATFORM_MAC
@@ -23,17 +24,27 @@ static void get_userdata_path(char *out, int size) {
     if (!sd) sd = "/mnt/SDCARD";
     const char *platform = getenv("PLATFORM");
     if (!platform) platform = "tg5040";
-    snprintf(out, size, "%s/.userdata/%s", sd, platform);
+    if (size > 0) {
+        if (path_join(out, (size_t)size, sd, ".userdata") != 0 ||
+            path_join(out, (size_t)size, out, platform) != 0) {
+            out[0] = '\0';
+        }
+    }
 #else
     const char *home = getenv("HOME");
     if (!home) home = "/tmp";
-    snprintf(out, size, "%s/.userdata/desktop", home);
+    if (size > 0) {
+        if (path_join(out, (size_t)size, home, ".userdata") != 0 ||
+            path_join(out, (size_t)size, out, "desktop") != 0) {
+            out[0] = '\0';
+        }
+    }
 #endif
 }
 
 static void mkdirp(const char *path) {
     char tmp[MAX_PATH];
-    snprintf(tmp, sizeof(tmp), "%s", path);
+    str_copy_trunc(tmp, sizeof(tmp), path);
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = '\0';
@@ -47,7 +58,13 @@ static void mkdirp(const char *path) {
 static void get_hook_dir(const char *category, char *out, int size) {
     char ud[MAX_PATH];
     get_userdata_path(ud, sizeof(ud));
-    snprintf(out, size, "%s/.hooks/%s", ud, category);
+    if (size > 0) {
+        if (!ud[0] ||
+            path_join(out, (size_t)size, ud, ".hooks") != 0 ||
+            path_join(out, (size_t)size, out, category) != 0) {
+            out[0] = '\0';
+        }
+    }
 }
 
 /* ── Script content ────────────────────────────────────────────── */
@@ -95,10 +112,11 @@ static const char *boot_script_template =
 /* ── Write script helper ──────────────────────────────────────── */
 
 static int write_script(const char *dir, const char *filename, const char *content) {
+    if (!dir[0]) return -1;
     mkdirp(dir);
 
     char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s/%s", dir, filename);
+    if (path_join(path, sizeof(path), dir, filename) != 0) return -1;
 
     FILE *f = fopen(path, "w");
     if (!f) {
@@ -115,7 +133,8 @@ static int write_script(const char *dir, const char *filename, const char *conte
 
 static int remove_script(const char *dir, const char *filename) {
     char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s/%s", dir, filename);
+    if (!dir[0] || path_join(path, sizeof(path), dir, filename) != 0)
+        return -1;
     if (unlink(path) != 0 && errno != ENOENT) {
         fprintf(stderr, "menulody: cannot remove hook %s: %s\n", path, strerror(errno));
         return -1;
@@ -125,7 +144,8 @@ static int remove_script(const char *dir, const char *filename) {
 
 static int script_exists(const char *dir, const char *filename) {
     char path[MAX_PATH];
-    snprintf(path, sizeof(path), "%s/%s", dir, filename);
+    if (!dir[0] || path_join(path, sizeof(path), dir, filename) != 0)
+        return 0;
     return access(path, F_OK) == 0;
 }
 
