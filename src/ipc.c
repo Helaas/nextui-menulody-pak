@@ -60,6 +60,7 @@ ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size)
     if (strcmp(buf, "SHUFFLE")      == 0) return IPC_CMD_SHUFFLE;
     if (strcmp(buf, "REPEAT")       == 0) return IPC_CMD_REPEAT;
     if (strcmp(buf, "RESCAN")       == 0) return IPC_CMD_RESCAN;
+    if (strcmp(buf, "RELOAD_CONFIG") == 0) return IPC_CMD_RELOAD_CONFIG;
     if (strcmp(buf, "STOP_PREVIEW") == 0) return IPC_CMD_STOP_PREVIEW;
     if (strcmp(buf, "RESUME")       == 0) return IPC_CMD_RESUME;
     if (strcmp(buf, "STATUS")       == 0) return IPC_CMD_STATUS;
@@ -77,6 +78,11 @@ ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size)
         if (out_str_arg && str_arg_size > 0)
             str_copy_trunc(out_str_arg, (size_t)str_arg_size, buf + 9);
         return IPC_CMD_PLAYLIST;
+    }
+    if (strncmp(buf, "PLAY_TRACK ", 11) == 0) {
+        if (out_str_arg && str_arg_size > 0)
+            str_copy_trunc(out_str_arg, (size_t)str_arg_size, buf + 11);
+        return IPC_CMD_PLAY_TRACK;
     }
     if (strncmp(buf, "PREVIEW ", 8) == 0) {
         if (out_str_arg && str_arg_size > 0)
@@ -96,6 +102,8 @@ void ipc_daemon_write_status(const ipc_status_t *st) {
     fprintf(f, "track_index=%d\n", st->track_index);
     fprintf(f, "track_count=%d\n", st->track_count);
     fprintf(f, "volume=%d\n", st->volume);
+    fprintf(f, "previewing=%d\n", st->previewing);
+    fprintf(f, "single_track=%d\n", st->single_track);
     fprintf(f, "track_name=%s\n", st->track_name);
     fprintf(f, "playlist=%s\n", st->playlist_name);
     fclose(f);
@@ -139,6 +147,7 @@ int ipc_client_send(ipc_cmd_t cmd, int arg) {
         case IPC_CMD_SHUFFLE:      str = "SHUFFLE\n";      break;
         case IPC_CMD_REPEAT:       str = "REPEAT\n";       break;
         case IPC_CMD_RESCAN:       str = "RESCAN\n";       break;
+        case IPC_CMD_RELOAD_CONFIG:str = "RELOAD_CONFIG\n"; break;
         case IPC_CMD_STOP_PREVIEW: str = "STOP_PREVIEW\n"; break;
         case IPC_CMD_RESUME:       str = "RESUME\n";       break;
         case IPC_CMD_STATUS:       str = "STATUS\n";       break;
@@ -163,6 +172,9 @@ int ipc_client_send_str(ipc_cmd_t cmd, const char *str_arg) {
         case IPC_CMD_PLAYLIST:
             snprintf(buf, sizeof(buf), "PLAYLIST %s\n", str_arg);
             break;
+        case IPC_CMD_PLAY_TRACK:
+            snprintf(buf, sizeof(buf), "PLAY_TRACK %s\n", str_arg);
+            break;
         case IPC_CMD_PREVIEW:
             snprintf(buf, sizeof(buf), "PREVIEW %s\n", str_arg);
             break;
@@ -186,6 +198,8 @@ int ipc_client_read_status(ipc_status_t *st) {
         if (sscanf(line, "track_index=%d", &st->track_index) == 1) continue;
         if (sscanf(line, "track_count=%d", &st->track_count) == 1) continue;
         if (sscanf(line, "volume=%d", &st->volume) == 1) continue;
+        if (sscanf(line, "previewing=%d", &st->previewing) == 1) continue;
+        if (sscanf(line, "single_track=%d", &st->single_track) == 1) continue;
         if (strncmp(line, "track_name=", 11) == 0) {
             str_copy_trunc(st->track_name, sizeof(st->track_name), line + 11);
             continue;

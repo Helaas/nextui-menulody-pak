@@ -92,7 +92,8 @@ static void print_status(void) {
     }
 
     printf("Daemon: running\n");
-    printf("State:  %s\n", st.playing ? "Playing" : "Paused");
+    printf("State:  %s\n", st.previewing ? "Previewing" : st.playing ? "Playing" : "Paused");
+    printf("Mode:   %s\n", st.single_track ? "Single Track Loop" : "Playlist Source");
     printf("Track:  %s (%d/%d)\n", st.track_name, st.track_index + 1, st.track_count);
     printf("Shuffle: %s\n", st.shuffle ? "ON" : "OFF");
     printf("Repeat: %s\n", st.repeat == 0 ? "OFF" : st.repeat == 1 ? "ONE" : "ALL");

@@ -32,6 +32,35 @@ static const char *repeat_label(int mode) {
     }
 }
 
+static void sync_settings_items_to_config(config_t *cfg, ap_options_item *items) {
+    int overlay_values[] = {0, 3, 5, 10, 9999};
+
+    cfg->shuffle = items[1].selected_option == 1;
+    cfg->repeat = (repeat_mode_t)items[2].selected_option;
+    cfg->volume = items[3].selected_option * 10;
+    cfg->pause_on_pak = items[4].selected_option == 1;
+    cfg->auto_start = items[5].selected_option == 1;
+    cfg->overlay_duration = overlay_values[items[6].selected_option];
+}
+
+static int music_folders_changed(const config_t *before, const config_t *after) {
+    if (before->music_dir_count != after->music_dir_count) return 1;
+    for (int i = 0; i < before->music_dir_count; i++) {
+        if (strcmp(before->music_dirs[i], after->music_dirs[i]) != 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void toggle_preview_for_path(const char *path) {
+    ipc_status_t st = poll_status();
+    if (st.previewing) {
+        ipc_client_send(IPC_CMD_STOP_PREVIEW, 0);
+    } else if (path && path[0]) {
+        ipc_client_send_str(IPC_CMD_PREVIEW, path);
+    }
+}
+
 /* ── Now Playing Screen ────────────────────────────────────────── */
 
 static void show_now_playing(void) {
@@ -45,17 +74,29 @@ static void show_now_playing(void) {
             snprintf(title, sizeof(title), "No track");
 
         char subtitle[128];
-        snprintf(subtitle, sizeof(subtitle), "%s | Shuffle: %s | Repeat: %s",
-                 st.playing ? "Playing" : "Paused",
-                 st.shuffle ? "On" : "Off",
-                 repeat_label(st.repeat));
+        if (st.previewing) {
+            snprintf(subtitle, sizeof(subtitle), "Previewing | Source: %s",
+                     st.playlist_name[0] ? st.playlist_name : "Unknown");
+        } else if (st.single_track) {
+            snprintf(subtitle, sizeof(subtitle), "%s | Single Song Loop",
+                     st.playing ? "Playing" : "Paused");
+        } else {
+            snprintf(subtitle, sizeof(subtitle), "%s | Shuffle: %s | Repeat: %s",
+                     st.playing ? "Playing" : "Paused",
+                     st.shuffle ? "On" : "Off",
+                     repeat_label(st.repeat));
+        }
 
-        char track_info[64];
-        if (st.track_count > 0)
+        char track_info[96];
+        if (st.single_track) {
+            snprintf(track_info, sizeof(track_info), "Looping selected song | Volume: %d%%",
+                     st.volume);
+        } else if (st.track_count > 0) {
             snprintf(track_info, sizeof(track_info), "Track %d / %d | Volume: %d%%",
                      st.track_index + 1, st.track_count, st.volume);
-        else
+        } else {
             snprintf(track_info, sizeof(track_info), "No tracks loaded");
+        }
 
         ap_list_item items[] = {
             {.label = title},
@@ -63,52 +104,71 @@ static void show_now_playing(void) {
             {.label = track_info},
         };
 
-        ap_footer_item footer[] = {
-            {AP_BTN_A, "Play/Pause", false, NULL},
-            {AP_BTN_L1, "Prev", false, NULL},
-            {AP_BTN_R1, "Next", false, NULL},
-            {AP_BTN_X, "Shuffle", false, NULL},
-            {AP_BTN_Y, "Repeat", false, NULL},
-            {AP_BTN_B, "Back", true, NULL},
-        };
-
         ap_list_opts opts = ap_list_default_opts("Now Playing", items, 3);
-        opts.footer = footer;
-        opts.footer_count = 6;
-        opts.action_button = AP_BTN_L1;
-        opts.secondary_action_button = AP_BTN_R1;
-        opts.tertiary_action_button = AP_BTN_X;
-        opts.confirm_button = AP_BTN_Y;
+        if (st.single_track) {
+            ap_footer_item footer[] = {
+                {AP_BTN_B, "Back", false, NULL},
+                {AP_BTN_A, "Play/Pause", true, NULL},
+            };
+            opts.footer = footer;
+            opts.footer_count = 2;
+            opts.action_button = AP_BTN_NONE;
+            opts.secondary_action_button = AP_BTN_NONE;
+            opts.tertiary_action_button = AP_BTN_NONE;
+            opts.confirm_button = AP_BTN_NONE;
 
-        ap_list_result result;
-        int rc = ap_list(&opts, &result);
+            ap_list_result result;
+            int rc = ap_list(&opts, &result);
 
-        if (rc == AP_CANCELLED) return;
+            if (rc == AP_CANCELLED) return;
+            if (rc == AP_OK && result.action == AP_ACTION_SELECTED)
+                ipc_client_send(IPC_CMD_TOGGLE, 0);
+            continue;
+        } else {
+            ap_footer_item footer[] = {
+                {AP_BTN_B, "Back", false, NULL},
+                {AP_BTN_L1, "Prev", false, NULL},
+                {AP_BTN_R1, "Next", false, NULL},
+                {AP_BTN_X, "Shuffle", false, NULL},
+                {AP_BTN_Y, "Repeat", false, NULL},
+                {AP_BTN_A, "Play/Pause", true, NULL},
+            };
+            opts.footer = footer;
+            opts.footer_count = 6;
+            opts.action_button = AP_BTN_L1;
+            opts.secondary_action_button = AP_BTN_R1;
+            opts.tertiary_action_button = AP_BTN_X;
+            opts.confirm_button = AP_BTN_Y;
+            ap_list_result result;
+            int rc = ap_list(&opts, &result);
 
-        if (rc == AP_OK) {
-            switch (result.action) {
-                case AP_ACTION_SELECTED:
-                    /* A — toggle play/pause */
-                    ipc_client_send(IPC_CMD_TOGGLE, 0);
-                    break;
-                case AP_ACTION_TRIGGERED:
-                    /* L1 — previous track */
-                    ipc_client_send(IPC_CMD_PREV, 0);
-                    break;
-                case AP_ACTION_SECONDARY_TRIGGERED:
-                    /* R1 — next track */
-                    ipc_client_send(IPC_CMD_NEXT, 0);
-                    break;
-                case AP_ACTION_TERTIARY_TRIGGERED:
-                    /* X — toggle shuffle */
-                    ipc_client_send(IPC_CMD_SHUFFLE, 0);
-                    break;
-                case AP_ACTION_CONFIRMED:
-                    /* Y — cycle repeat */
-                    ipc_client_send(IPC_CMD_REPEAT, 0);
-                    break;
-                default:
-                    break;
+            if (rc == AP_CANCELLED) return;
+
+            if (rc == AP_OK) {
+                switch (result.action) {
+                    case AP_ACTION_SELECTED:
+                        /* A — toggle play/pause */
+                        ipc_client_send(IPC_CMD_TOGGLE, 0);
+                        break;
+                    case AP_ACTION_TRIGGERED:
+                        /* L1 — previous track */
+                        ipc_client_send(IPC_CMD_PREV, 0);
+                        break;
+                    case AP_ACTION_SECONDARY_TRIGGERED:
+                        /* R1 — next track */
+                        ipc_client_send(IPC_CMD_NEXT, 0);
+                        break;
+                    case AP_ACTION_TERTIARY_TRIGGERED:
+                        /* X — toggle shuffle */
+                        ipc_client_send(IPC_CMD_SHUFFLE, 0);
+                        break;
+                    case AP_ACTION_CONFIRMED:
+                        /* Y — cycle repeat */
+                        ipc_client_send(IPC_CMD_REPEAT, 0);
+                        break;
+                    default:
+                        break;
+                }
             }
         }
     }
@@ -143,10 +203,12 @@ static void show_library(void) {
     snprintf(header, sizeof(header), "Library (%d tracks)", lib.count);
 
     for (;;) {
+        ipc_status_t st = poll_status();
+        const char *preview_label = st.previewing ? "Stop Preview" : "Preview";
         ap_footer_item footer[] = {
-            {AP_BTN_A, "Play", false, NULL},
-            {AP_BTN_Y, "Preview", false, NULL},
-            {AP_BTN_B, "Back", true, NULL},
+            {AP_BTN_B, "Back", false, NULL},
+            {AP_BTN_Y, preview_label, false, NULL},
+            {AP_BTN_A, "Play", true, NULL},
         };
 
         ap_list_opts opts = ap_list_default_opts(header, items, lib.count);
@@ -161,13 +223,14 @@ static void show_library(void) {
 
         if (rc == AP_OK) {
             if (result.action == AP_ACTION_SELECTED) {
-                /* Play selected track */
-                ipc_client_send(IPC_CMD_SELECT, result.selected_index);
+                /* Start single-track loop mode */
+                if (result.selected_index >= 0 && result.selected_index < lib.count)
+                    ipc_client_send_str(IPC_CMD_PLAY_TRACK, lib.paths[result.selected_index]);
                 break;
             } else if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
-                /* Preview selected track */
+                /* Preview toggle */
                 if (result.selected_index >= 0 && result.selected_index < lib.count)
-                    ipc_client_send_str(IPC_CMD_PREVIEW, lib.paths[result.selected_index]);
+                    toggle_preview_for_path(lib.paths[result.selected_index]);
             }
         }
     }
@@ -208,11 +271,13 @@ static void show_create_playlist(void) {
              kb_result.text);
 
     for (;;) {
+        ipc_status_t st = poll_status();
+        const char *preview_label = st.previewing ? "Stop Preview" : "Preview";
         ap_footer_item footer[] = {
+            {AP_BTN_B, "Cancel", false, NULL},
             {AP_BTN_A, "Toggle", false, NULL},
-            {AP_BTN_Y, "Preview", false, NULL},
+            {AP_BTN_Y, preview_label, false, NULL},
             {AP_BTN_START, "Save", true, NULL},
-            {AP_BTN_B, "Cancel", true, NULL},
         };
 
         ap_list_opts opts = ap_list_default_opts(header, items, lib.count);
@@ -250,9 +315,9 @@ static void show_create_playlist(void) {
                 }
                 break;
             } else if (result.action == AP_ACTION_SECONDARY_TRIGGERED) {
-                /* Preview focused track */
+                /* Preview toggle */
                 if (result.selected_index >= 0 && result.selected_index < lib.count)
-                    ipc_client_send_str(IPC_CMD_PREVIEW, lib.paths[result.selected_index]);
+                    toggle_preview_for_path(lib.paths[result.selected_index]);
             }
         }
     }
@@ -262,68 +327,6 @@ static void show_create_playlist(void) {
 
     free(items);
     playlist_free(&lib);
-}
-
-static void show_playlist_detail(const char *name) {
-    named_playlist_t named;
-    if (playlist_named_load(name, &named) < 0) return;
-
-    if (named.count == 0) {
-        ap_message_opts msg = {.message = "This playlist is empty."};
-        ap_confirm_result dummy;
-        ap_confirmation(&msg, &dummy);
-        playlist_named_free(&named);
-        return;
-    }
-
-    /* Build list items from track paths */
-    ap_list_item *items = calloc(named.count, sizeof(ap_list_item));
-    char **display_names = calloc(named.count, sizeof(char *));
-    if (!items || !display_names) {
-        free(items); free(display_names);
-        playlist_named_free(&named);
-        return;
-    }
-
-    for (int i = 0; i < named.count; i++) {
-        const char *slash = strrchr(named.tracks[i], '/');
-        const char *fname = slash ? slash + 1 : named.tracks[i];
-        /* Strip extension */
-        const char *dot = strrchr(fname, '.');
-        size_t len = dot ? (size_t)(dot - fname) : strlen(fname);
-        display_names[i] = malloc(len + 1);
-        if (display_names[i]) {
-            memcpy(display_names[i], fname, len);
-            display_names[i][len] = '\0';
-        } else {
-            display_names[i] = strdup(fname);
-        }
-        items[i] = (ap_list_item){.label = display_names[i] ? display_names[i] : fname};
-    }
-
-    ap_footer_item footer[] = {
-        {AP_BTN_A, "Play", false, NULL},
-        {AP_BTN_B, "Back", true, NULL},
-    };
-
-    ap_list_opts opts = ap_list_default_opts(name, items, named.count);
-    opts.footer = footer;
-    opts.footer_count = 2;
-
-    ap_list_result result;
-    int rc = ap_list(&opts, &result);
-
-    if (rc == AP_OK && result.action == AP_ACTION_SELECTED) {
-        /* Switch to this playlist and play selected track */
-        ipc_client_send_str(IPC_CMD_PLAYLIST, name);
-        usleep(200000);
-        ipc_client_send(IPC_CMD_SELECT, result.selected_index);
-    }
-
-    for (int i = 0; i < named.count; i++) free(display_names[i]);
-    free(display_names);
-    free(items);
-    playlist_named_free(&named);
 }
 
 static void show_playlists(void) {
@@ -348,9 +351,9 @@ static void show_playlists(void) {
         }
 
         ap_footer_item footer[] = {
-            {AP_BTN_A, "Select", false, NULL},
+            {AP_BTN_B, "Back", false, NULL},
             {AP_BTN_X, "Delete", false, NULL},
-            {AP_BTN_B, "Back", true, NULL},
+            {AP_BTN_A, "Select", true, NULL},
         };
 
         ap_list_opts opts = ap_list_default_opts("Playlists", items, total);
@@ -371,12 +374,20 @@ static void show_playlists(void) {
         if (rc == AP_OK) {
             if (result.action == AP_ACTION_SELECTED) {
                 if (result.selected_index == 0) {
-                    /* All Songs */
+                    /* All Songs source */
                     ipc_client_send_str(IPC_CMD_PLAYLIST, "all");
+                    free(items);
+                    for (int i = 0; i < count; i++) free(names[i]);
+                    free(names);
+                    return;
                 } else if (result.selected_index == 1) {
                     show_create_playlist();
                 } else {
-                    show_playlist_detail(names[result.selected_index - 2]);
+                    ipc_client_send_str(IPC_CMD_PLAYLIST, names[result.selected_index - 2]);
+                    free(items);
+                    for (int i = 0; i < count; i++) free(names[i]);
+                    free(names);
+                    return;
                 }
             } else if (result.action == AP_ACTION_SECONDARY_TRIGGERED
                        && result.selected_index >= 2) {
@@ -413,9 +424,9 @@ static void show_music_folders(config_t *cfg) {
         items[cfg->music_dir_count] = (ap_list_item){.label = "+ Add Folder"};
 
         ap_footer_item footer[] = {
-            {AP_BTN_A, "Select", false, NULL},
+            {AP_BTN_B, "Back", false, NULL},
             {AP_BTN_X, "Remove", false, NULL},
-            {AP_BTN_B, "Back", true, NULL},
+            {AP_BTN_A, "Select", true, NULL},
         };
 
         ap_list_opts opts = ap_list_default_opts("Music Folders", items, total);
@@ -441,9 +452,6 @@ static void show_music_folders(config_t *cfg) {
                         str_copy_trunc(cfg->music_dirs[cfg->music_dir_count], CONFIG_MAX_PATH,
                                        fp_result.path);
                         cfg->music_dir_count++;
-                        config_save(cfg);
-                        /* Tell daemon to rescan */
-                        ipc_client_send(IPC_CMD_RESCAN, 0);
                     }
                 }
             } else if (result.action == AP_ACTION_SECONDARY_TRIGGERED
@@ -456,8 +464,6 @@ static void show_music_folders(config_t *cfg) {
                                        cfg->music_dirs[i + 1]);
                     }
                     cfg->music_dir_count--;
-                    config_save(cfg);
-                    ipc_client_send(IPC_CMD_RESCAN, 0);
                 }
             }
         }
@@ -465,7 +471,8 @@ static void show_music_folders(config_t *cfg) {
 }
 
 static void show_settings(void) {
-    config_t cfg = config_load();
+    config_t original = config_load();
+    config_t cfg = original;
 
     /* Build ap_option arrays for each setting */
     ap_option shuffle_opts[] = {{.label = "Off"}, {.label = "On"}};
@@ -507,36 +514,46 @@ static void show_settings(void) {
                            cfg.overlay_duration <= 10 ? 3 : 4},
     };
 
+    int last_cursor = 0;
+    int last_visible = 0;
     for (;;) {
+        ap_footer_item footer[] = {
+            {AP_BTN_B, "Cancel", false, NULL},
+            {AP_BTN_START, "Save", true, NULL},
+        };
         ap_options_list_opts opts = {
             .title = "Settings",
             .items = items,
             .item_count = 7,
+            .footer = footer,
+            .footer_count = 2,
+            .confirm_button = AP_BTN_START,
+            .initial_selected_index = last_cursor,
+            .visible_start_index = last_visible,
         };
         ap_options_list_result result;
         int rc = ap_options_list(&opts, &result);
+        last_cursor = result.focused_index;
+        last_visible = result.visible_start_index;
+        sync_settings_items_to_config(&cfg, items);
 
-        /* Read back current values on every exit */
-        cfg.shuffle = items[1].selected_option == 1;
-        cfg.repeat = (repeat_mode_t)items[2].selected_option;
-        cfg.volume = items[3].selected_option * 10;
-        cfg.pause_on_pak = items[4].selected_option == 1;
-        cfg.auto_start = items[5].selected_option == 1;
+        if (rc == AP_CANCELLED) return;
 
-        int overlay_values[] = {0, 3, 5, 10, 9999};
-        cfg.overlay_duration = overlay_values[items[6].selected_option];
-
-        config_save(&cfg);
-
-        /* Apply changes to daemon */
-        ipc_client_send(IPC_CMD_VOLUME, cfg.volume);
-        hooks_apply_config(cfg.auto_start);
-
-        if (rc == AP_CANCELLED) break;
-
-        if (rc == AP_OK && result.focused_index == 0) {
-            /* Music Folders clicked */
+        if (rc == AP_OK && result.action == AP_ACTION_SELECTED
+            && result.focused_index == 0) {
             show_music_folders(&cfg);
+            continue;
+        }
+
+        if (rc == AP_OK && result.action == AP_ACTION_CONFIRMED) {
+            int folders_changed = music_folders_changed(&original, &cfg);
+            config_save(&cfg);
+            if (folders_changed)
+                ipc_client_send(IPC_CMD_RESCAN, 0);
+            else
+                ipc_client_send(IPC_CMD_RELOAD_CONFIG, 0);
+            hooks_apply_config(cfg.auto_start);
+            return;
         }
     }
 }
@@ -566,8 +583,8 @@ void run_app(void) {
         };
 
         ap_footer_item footer[] = {
-            {AP_BTN_A, "Select", false, NULL},
-            {AP_BTN_B, "Quit", true, NULL},
+            {AP_BTN_B, "Quit", false, NULL},
+            {AP_BTN_A, "Select", true, NULL},
         };
 
         ap_list_opts opts = ap_list_default_opts("Menulody", items, 4);

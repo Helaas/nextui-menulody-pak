@@ -30,9 +30,13 @@ static player_t     player;
 static playlist_t   playlist;
 static config_t     config;
 static daemon_state_t state = STATE_IDLE;
+static int          single_track_mode = 0;
 
 /* Preview state */
 static daemon_state_t pre_preview_state = STATE_IDLE;
+static char           preview_track_name[256] = {0};
+static char           last_overlay_track_path[CONFIG_MAX_PATH] = {0};
+static int            overlay_has_shown = 0;
 
 /* ── Signal handler ─────────────────────────────────────────────── */
 
@@ -44,8 +48,48 @@ static void handle_signal(int sig) {
 /* ── Forward declarations ──────────────────────────────────────── */
 
 static void update_status(void);
+static void load_track_name_from_path(const char *path, char *out, int out_size);
+static void select_current_track_by_path(playlist_t *pl, const char *path);
+static void apply_playlist_config_from_settings(playlist_t *pl);
 
 /* ── Helpers ────────────────────────────────────────────────────── */
+
+static void load_track_name_from_path(const char *path, char *out, int out_size) {
+    const char *slash;
+    const char *filename;
+    const char *dot;
+    size_t len;
+
+    if (!out || out_size <= 0) return;
+    out[0] = '\0';
+    if (!path || !path[0]) return;
+
+    slash = strrchr(path, '/');
+    filename = slash ? slash + 1 : path;
+    dot = strrchr(filename, '.');
+    len = dot ? (size_t)(dot - filename) : strlen(filename);
+    if (len >= (size_t)out_size) len = (size_t)out_size - 1;
+    memcpy(out, filename, len);
+    out[len] = '\0';
+}
+
+static void select_current_track_by_path(playlist_t *pl, const char *path) {
+    if (!pl || !path || !path[0]) return;
+    for (int i = 0; i < pl->count; i++) {
+        if (pl->paths[i] && strcmp(pl->paths[i], path) == 0) {
+            playlist_select(pl, i);
+            return;
+        }
+    }
+}
+
+static void apply_playlist_config_from_settings(playlist_t *pl) {
+    if (!pl || single_track_mode) return;
+
+    if (pl->shuffle != (config.shuffle ? 1 : 0))
+        playlist_shuffle_toggle(pl);
+    pl->repeat = (int)config.repeat;
+}
 
 static void start_current_track(void) {
     const char *path = playlist_current_path(&playlist);
@@ -64,16 +108,20 @@ static void start_current_track(void) {
 
     state = STATE_PLAYING;
 
-    /* Show overlay notification */
+    /* Show overlay notification once on first playback, then only when track changes. */
     const char *name = playlist_current_name(&playlist);
-    if (name && config.overlay_duration > 0)
+    if (name && path && config.overlay_duration > 0
+        && (!overlay_has_shown || strcmp(last_overlay_track_path, path) != 0)) {
         overlay_set_text(name, config.overlay_duration);
+        str_copy_trunc(last_overlay_track_path, sizeof(last_overlay_track_path), path);
+        overlay_has_shown = 1;
+    }
 
     update_status();
 }
 
 static void update_status(void) {
-    const char *name = playlist_current_name(&playlist);
+    const char *name = NULL;
     ipc_status_t st = {
         .playing     = (state == STATE_PLAYING || state == STATE_PREVIEWING) ? 1 : 0,
         .shuffle     = playlist.shuffle,
@@ -81,7 +129,13 @@ static void update_status(void) {
         .track_index = playlist_current_index(&playlist),
         .track_count = playlist.count,
         .volume      = config.volume,
+        .previewing  = (state == STATE_PREVIEWING) ? 1 : 0,
+        .single_track = single_track_mode ? 1 : 0,
     };
+    if (state == STATE_PREVIEWING && preview_track_name[0])
+        name = preview_track_name;
+    else
+        name = playlist_current_name(&playlist);
     if (name) str_copy_trunc(st.track_name, sizeof(st.track_name), name);
     str_copy_trunc(st.playlist_name, sizeof(st.playlist_name), playlist.name);
     ipc_daemon_write_status(&st);
@@ -204,6 +258,10 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_NEXT:
+                if (single_track_mode) {
+                    update_status();
+                    break;
+                }
                 player_close(&player);
                 if (playlist_next(&playlist) >= 0) {
                     if (state == STATE_PLAYING || menu_active)
@@ -215,6 +273,10 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_PREV:
+                if (single_track_mode) {
+                    update_status();
+                    break;
+                }
                 player_close(&player);
                 playlist_prev(&playlist);
                 if (state == STATE_PLAYING || menu_active)
@@ -222,6 +284,10 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_SELECT:
+                if (single_track_mode) {
+                    update_status();
+                    break;
+                }
                 player_close(&player);
                 playlist_select(&playlist, int_arg);
                 if (state == STATE_PLAYING || menu_active)
@@ -229,6 +295,10 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_SHUFFLE:
+                if (single_track_mode) {
+                    update_status();
+                    break;
+                }
                 playlist_shuffle_toggle(&playlist);
                 config.shuffle = playlist.shuffle;
                 config_save(&config);
@@ -236,6 +306,10 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_REPEAT:
+                if (single_track_mode) {
+                    update_status();
+                    break;
+                }
                 playlist_repeat_cycle(&playlist);
                 config.repeat = (repeat_mode_t)playlist.repeat;
                 config_save(&config);
@@ -250,37 +324,105 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_RESCAN:
+            {
+                daemon_state_t old_state = state;
+                char current_path[CONFIG_MAX_PATH] = {0};
+                char current_source[PLAYLIST_NAME_MAX] = {0};
+
+                if (playlist_current_path(&playlist))
+                    str_copy_trunc(current_path, sizeof(current_path), playlist_current_path(&playlist));
+                str_copy_trunc(current_source, sizeof(current_source), playlist.name);
+
                 player_close(&player);
-                playlist_free(&playlist);
                 config = config_load();
                 player_set_volume(&player, config.volume);
-                if (playlist_scan(&playlist, &config) == 0) {
-                    if (menu_active) start_current_track();
+
+                if (single_track_mode) {
+                    if (current_path[0] && playlist_load_single_track(&playlist, current_path) == 0) {
+                        if (old_state == STATE_PLAYING || old_state == STATE_PREVIEWING) {
+                            start_current_track();
+                        } else {
+                            state = old_state;
+                            update_status();
+                        }
+                    } else {
+                        playlist_free(&playlist);
+                        state = STATE_IDLE;
+                        update_status();
+                    }
+                } else if (strcmp(current_source, "All Songs") == 0 || current_source[0] == '\0') {
+                    playlist_free(&playlist);
+                    if (playlist_scan(&playlist, &config) == 0) {
+                        if (current_path[0]) select_current_track_by_path(&playlist, current_path);
+                        if (old_state == STATE_PLAYING || old_state == STATE_PREVIEWING) {
+                            start_current_track();
+                        } else {
+                            state = old_state;
+                            update_status();
+                        }
+                    } else {
+                        state = STATE_IDLE;
+                        update_status();
+                    }
                 } else {
-                    state = STATE_IDLE;
+                    playlist_free(&playlist);
+                    if (playlist_load_named(&playlist, current_source) == 0) {
+                        apply_playlist_config_from_settings(&playlist);
+                        if (current_path[0]) select_current_track_by_path(&playlist, current_path);
+                        if (old_state == STATE_PLAYING || old_state == STATE_PREVIEWING) {
+                            start_current_track();
+                        } else {
+                            state = old_state;
+                            update_status();
+                        }
+                    } else {
+                        state = STATE_IDLE;
+                        update_status();
+                    }
                 }
-                update_status();
                 break;
+            }
 
             case IPC_CMD_PLAYLIST:
                 player_close(&player);
                 playlist_free(&playlist);
+                single_track_mode = 0;
+                preview_track_name[0] = '\0';
                 if (strcmp(str_arg, "all") == 0 || str_arg[0] == '\0') {
                     if (playlist_scan(&playlist, &config) == 0) {
-                        if (menu_active) start_current_track();
+                        start_current_track();
                     } else {
                         state = STATE_IDLE;
                     }
                 } else {
                     if (playlist_load_named(&playlist, str_arg) == 0) {
-                        playlist.shuffle = config.shuffle;
-                        playlist.repeat = (int)config.repeat;
-                        if (playlist.shuffle) playlist_reshuffle(&playlist);
-                        if (menu_active) start_current_track();
+                        apply_playlist_config_from_settings(&playlist);
+                        start_current_track();
                     } else {
                         state = STATE_IDLE;
                     }
                 }
+                update_status();
+                break;
+
+            case IPC_CMD_PLAY_TRACK:
+                player_close(&player);
+                playlist_free(&playlist);
+                preview_track_name[0] = '\0';
+                if (playlist_load_single_track(&playlist, str_arg) == 0) {
+                    single_track_mode = 1;
+                    start_current_track();
+                } else {
+                    single_track_mode = 0;
+                    state = STATE_IDLE;
+                    update_status();
+                }
+                break;
+
+            case IPC_CMD_RELOAD_CONFIG:
+                config = config_load();
+                player_set_volume(&player, config.volume);
+                apply_playlist_config_from_settings(&playlist);
                 update_status();
                 break;
 
@@ -293,17 +435,21 @@ int daemon_run(void) {
                 }
                 player_close(&player);
                 if (player_open(&player, str_arg) == 0) {
+                    load_track_name_from_path(str_arg, preview_track_name, sizeof(preview_track_name));
                     state = STATE_PREVIEWING;
+                    update_status();
                 }
                 break;
 
             case IPC_CMD_STOP_PREVIEW:
                 if (state == STATE_PREVIEWING) {
                     player_close(&player);
+                    preview_track_name[0] = '\0';
                     if (pre_preview_state == STATE_PLAYING) {
                         start_current_track();
                     } else {
                         state = pre_preview_state;
+                        update_status();
                     }
                 }
                 break;

@@ -19,7 +19,9 @@ typedef enum {
     IPC_CMD_REPEAT,       /* cycle repeat mode */
     IPC_CMD_VOLUME,       /* set volume 0-100 */
     IPC_CMD_PLAYLIST,     /* switch playlist by name */
+    IPC_CMD_PLAY_TRACK,   /* switch to a single-song looping source by path */
     IPC_CMD_RESCAN,
+    IPC_CMD_RELOAD_CONFIG, /* apply config changes without rebuilding source */
     IPC_CMD_PREVIEW,      /* preview a track by path */
     IPC_CMD_STOP_PREVIEW,
     IPC_CMD_RESUME,       /* resume from hook pause */
@@ -35,6 +37,8 @@ typedef struct {
     int    track_index;      /* current track index */
     int    track_count;      /* total tracks */
     int    volume;           /* 0-100 */
+    int    previewing;       /* 1 = preview currently playing */
+    int    single_track;     /* 1 = active source is a single looping track */
     char   track_name[256];  /* display name of current track */
     char   playlist_name[128]; /* name of active playlist */
 } ipc_status_t;

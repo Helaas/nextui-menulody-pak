@@ -78,4 +78,7 @@ void playlist_named_free(named_playlist_t *pl);
 /* Load a named playlist into the active playlist_t for playback */
 int  playlist_load_named(playlist_t *pl, const char *name);
 
+/* Load a single track as a one-song looping playback source. */
+int  playlist_load_single_track(playlist_t *pl, const char *path);
+
 #endif /* MENULODY_PLAYLIST_H */

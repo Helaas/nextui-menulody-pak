@@ -453,3 +453,42 @@ int playlist_load_named(playlist_t *pl, const char *name) {
 
     return 0;
 }
+
+int playlist_load_single_track(playlist_t *pl, const char *path) {
+    struct stat st;
+    const char *slash;
+    const char *filename;
+
+    if (!path || !path[0]) return -1;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return -1;
+
+    slash = strrchr(path, '/');
+    filename = slash ? slash + 1 : path;
+    if (!is_music_file(filename)) return -1;
+
+    playlist_free(pl);
+    memset(pl, 0, sizeof(*pl));
+
+    pl->paths = calloc(1, sizeof(char *));
+    pl->names = calloc(1, sizeof(char *));
+    pl->order = calloc(1, sizeof(int));
+    if (!pl->paths || !pl->names || !pl->order) {
+        playlist_free(pl);
+        return -1;
+    }
+
+    pl->paths[0] = strdup(path);
+    pl->names[0] = strip_extension(filename);
+    if (!pl->paths[0] || !pl->names[0]) {
+        playlist_free(pl);
+        return -1;
+    }
+
+    pl->order[0] = 0;
+    pl->count = 1;
+    pl->position = 0;
+    pl->shuffle = 0;
+    pl->repeat = REPEAT_ONE;
+    str_copy_trunc(pl->name, sizeof(pl->name), "Single Track");
+    return 0;
+}
