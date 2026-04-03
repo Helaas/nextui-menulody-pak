@@ -61,6 +61,12 @@ static void toggle_preview_for_path(const char *path) {
     }
 }
 
+static void show_info_message(const char *message) {
+    ap_message_opts msg = {.message = message};
+    ap_confirm_result dummy;
+    ap_confirmation(&msg, &dummy);
+}
+
 /* ── Now Playing Screen ────────────────────────────────────────── */
 
 static void show_now_playing(void) {
@@ -512,11 +518,17 @@ static void show_settings(void) {
                            cfg.overlay_duration <= 3 ? 1 :
                            cfg.overlay_duration <= 5 ? 2 :
                            cfg.overlay_duration <= 10 ? 3 : 4},
+        {.label = "Stop Daemon (Session)", .type = AP_OPT_CLICKABLE},
     };
 
     int last_cursor = 0;
     int last_visible = 0;
     for (;;) {
+        int daemon_running = ipc_daemon_running();
+        items[7].label = daemon_running
+            ? "Stop Daemon (Session)"
+            : "Daemon Stopped (Session)";
+
         ap_footer_item footer[] = {
             {AP_BTN_B, "Cancel", false, NULL},
             {AP_BTN_START, "Save", true, NULL},
@@ -524,7 +536,7 @@ static void show_settings(void) {
         ap_options_list_opts opts = {
             .title = "Settings",
             .items = items,
-            .item_count = 7,
+            .item_count = 8,
             .footer = footer,
             .footer_count = 2,
             .confirm_button = AP_BTN_START,
@@ -545,13 +557,28 @@ static void show_settings(void) {
             continue;
         }
 
+        if (rc == AP_OK && result.action == AP_ACTION_SELECTED
+            && result.focused_index == 7) {
+            if (daemon_running) {
+                ipc_client_send(IPC_CMD_QUIT, 0);
+                usleep(150000);
+                show_info_message("Daemon stopped for this session.\n"
+                                  "Launching Menulody again will start it back up.");
+            } else {
+                show_info_message("Daemon is already stopped for this session.");
+            }
+            continue;
+        }
+
         if (rc == AP_OK && result.action == AP_ACTION_CONFIRMED) {
             int folders_changed = music_folders_changed(&original, &cfg);
             config_save(&cfg);
-            if (folders_changed)
-                ipc_client_send(IPC_CMD_RESCAN, 0);
-            else
-                ipc_client_send(IPC_CMD_RELOAD_CONFIG, 0);
+            if (ipc_daemon_running()) {
+                if (folders_changed)
+                    ipc_client_send(IPC_CMD_RESCAN, 0);
+                else
+                    ipc_client_send(IPC_CMD_RELOAD_CONFIG, 0);
+            }
             hooks_apply_config(cfg.auto_start);
             return;
         }
