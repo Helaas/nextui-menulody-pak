@@ -1,42 +1,51 @@
 /*
  * menulody_overlay.so — LD_PRELOAD hook for flicker-free overlay rendering.
  *
- * Intercepts SDL_RenderPresent so we can blit the Menulody now-playing pill
- * onto the framebuffer after every NextUI frame.  The Menulody daemon renders
- * the pill into a shared-memory file; this hook reads it and alpha-blends it
- * onto /dev/fb0.
+ * Intercepts SDL_RenderPresent so we can composite the Menulody now-playing
+ * pill into the SDL renderer BEFORE the real present call.  The pill is thus
+ * part of the GPU-composed frame and presented atomically — zero flicker.
+ *
+ * The Menulody daemon renders the pill into a shared-memory file; this hook
+ * reads the pixel data, uploads it to an SDL texture, and draws it via
+ * SDL_RenderCopy right before the real SDL_RenderPresent.
+ *
+ * SDL functions are resolved at runtime via dlsym (no -lSDL2 linkage needed).
  *
  * Build:  gcc -std=gnu11 -O2 -fPIC -shared -o menulody_overlay.so preload.c -ldl
- * No SDL dependency — only libc and libdl.
  */
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <linux/fb.h>
 
 #include "overlay_shm.h"
 
-/* ── Real SDL_RenderPresent ─────────────────────────────────────── */
+/* ── SDL constants (avoid pulling in SDL headers) ───────────────── */
 
-typedef void (*sdl_render_present_fn)(void *);
-static sdl_render_present_fn real_present;
+#define ML_SDL_PIXELFORMAT_ARGB8888  0x16362004u
+#define ML_SDL_TEXTUREACCESS_STREAMING  1
+#define ML_SDL_BLENDMODE_BLEND  1
 
-/* ── Framebuffer state (lazy init) ──────────────────────────────── */
+/* ── SDL function pointers (resolved lazily via dlsym) ──────────── */
 
-static uint32_t *fb_mem;
-static int fb_fd       = -1;
-static int fb_width;
-static int fb_height;
-static int fb_stride;       /* pixels per row */
-static int fb_mapped_size;
-static int fb_ok;
+typedef void  (*fn_SDL_RenderPresent)(void *);
+typedef void *(*fn_SDL_CreateTexture)(void *, uint32_t, int, int, int);
+typedef int   (*fn_SDL_UpdateTexture)(void *, const void *, const void *, int);
+typedef int   (*fn_SDL_SetTextureBlendMode)(void *, int);
+typedef int   (*fn_SDL_RenderCopy)(void *, void *, const void *, const void *);
+typedef void  (*fn_SDL_DestroyTexture)(void *);
+
+static fn_SDL_RenderPresent       real_present;
+static fn_SDL_CreateTexture       pfn_CreateTexture;
+static fn_SDL_UpdateTexture       pfn_UpdateTexture;
+static fn_SDL_SetTextureBlendMode pfn_SetBlendMode;
+static fn_SDL_RenderCopy          pfn_RenderCopy;
+static fn_SDL_DestroyTexture      pfn_DestroyTexture;
+static int sdl_funcs_ok;
 
 /* ── Shared memory state (lazy init) ────────────────────────────── */
 
@@ -51,37 +60,22 @@ static int cached_x, cached_y, cached_w, cached_h;
 static int cached_active;
 static int cached_version = -1;
 
+/* ── Cached SDL texture ─────────────────────────────────────────── */
+
+static void *overlay_texture;     /* SDL_Texture* */
+static int   tex_w, tex_h;       /* dimensions of current texture */
+
 /* ── Init helpers ───────────────────────────────────────────────── */
 
-static void init_fb(void) {
-    struct fb_var_screeninfo vinfo;
-    struct fb_fix_screeninfo finfo;
+static void init_sdl_funcs(void) {
+    pfn_CreateTexture = (fn_SDL_CreateTexture)dlsym(RTLD_NEXT, "SDL_CreateTexture");
+    pfn_UpdateTexture = (fn_SDL_UpdateTexture)dlsym(RTLD_NEXT, "SDL_UpdateTexture");
+    pfn_SetBlendMode  = (fn_SDL_SetTextureBlendMode)dlsym(RTLD_NEXT, "SDL_SetTextureBlendMode");
+    pfn_RenderCopy    = (fn_SDL_RenderCopy)dlsym(RTLD_NEXT, "SDL_RenderCopy");
+    pfn_DestroyTexture = (fn_SDL_DestroyTexture)dlsym(RTLD_NEXT, "SDL_DestroyTexture");
 
-    fb_fd = open("/dev/fb0", O_RDWR);
-    if (fb_fd < 0) return;
-
-    if (ioctl(fb_fd, FBIOGET_VSCREENINFO, &vinfo) < 0 ||
-        vinfo.bits_per_pixel != 32) {
-        close(fb_fd); fb_fd = -1; return;
-    }
-
-    fb_width  = (int)vinfo.xres;
-    fb_height = (int)vinfo.yres;
-
-    if (ioctl(fb_fd, FBIOGET_FSCREENINFO, &finfo) < 0) {
-        close(fb_fd); fb_fd = -1; return;
-    }
-
-    fb_stride      = (int)(finfo.line_length / 4);
-    fb_mapped_size = (int)(finfo.line_length * vinfo.yres);
-
-    fb_mem = (uint32_t *)mmap(NULL, (size_t)fb_mapped_size,
-                              PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0);
-    if (fb_mem == MAP_FAILED) {
-        fb_mem = NULL; close(fb_fd); fb_fd = -1; return;
-    }
-
-    fb_ok = 1;
+    sdl_funcs_ok = pfn_CreateTexture && pfn_UpdateTexture &&
+                   pfn_SetBlendMode && pfn_RenderCopy && pfn_DestroyTexture;
 }
 
 static void init_shm(void) {
@@ -104,7 +98,7 @@ static void init_shm(void) {
     shm_ok = 1;
 }
 
-/* ── Overlay blit ───────────────────────────────────────────────── */
+/* ── Overlay cache + draw ───────────────────────────────────────── */
 
 static void refresh_cache(void) {
     int v1, v2;
@@ -136,13 +130,11 @@ static void refresh_cache(void) {
     cached_version = v1;
 }
 
-static void blit_overlay(void) {
-    int x0, y0, w, h;
-    const uint32_t *src;
-    uint32_t *dst_row;
+static void draw_overlay(void *renderer) {
+    typedef struct { int x, y, w, h; } SDL_Rect;
+    SDL_Rect dst;
 
     if (!shm || !shm_ok) {
-        /* Try (re)opening shm — daemon may have started after us. */
         if (shm_fd >= 0) return;           /* already tried and failed hard */
         init_shm();
         if (!shm_ok) return;
@@ -151,56 +143,47 @@ static void blit_overlay(void) {
     if (shm->version != cached_version)
         refresh_cache();
 
-    if (!cached_active) return;
+    if (!cached_active || cached_w <= 0 || cached_h <= 0)
+        return;
 
-    x0 = cached_x;
-    y0 = cached_y;
-    w  = cached_w;
-    h  = cached_h;
-
-    /* Sanity checks */
-    if (w <= 0 || h <= 0) return;
-    if (x0 < 0 || y0 < 0) return;
-    if (x0 + w > fb_width || y0 + h > fb_height) return;
-
-    src = cached_pixels;
-    for (int row = 0; row < h; row++) {
-        dst_row = fb_mem + (size_t)(y0 + row) * fb_stride + x0;
-        for (int col = 0; col < w; col++) {
-            uint32_t px = src[row * w + col];
-            uint32_t a  = (px >> 24) & 0xFF;
-
-            if (a == 0) continue;
-
-            if (a == 255) {
-                dst_row[col] = px;
-            } else {
-                /* Alpha blend over framebuffer pixel */
-                uint32_t bg  = dst_row[col];
-                uint32_t inv = 255 - a;
-                uint32_t rb  = (((px & 0x00FF00FFu) * a +
-                                 (bg & 0x00FF00FFu) * inv) >> 8) & 0x00FF00FFu;
-                uint32_t g   = (((px & 0x0000FF00u) * a +
-                                 (bg & 0x0000FF00u) * inv) >> 8) & 0x0000FF00u;
-                dst_row[col] = 0xFF000000u | rb | g;
-            }
-        }
+    /* Recreate texture if dimensions changed */
+    if (overlay_texture && (tex_w != cached_w || tex_h != cached_h)) {
+        pfn_DestroyTexture(overlay_texture);
+        overlay_texture = NULL;
     }
+
+    if (!overlay_texture) {
+        overlay_texture = pfn_CreateTexture(
+            renderer, ML_SDL_PIXELFORMAT_ARGB8888,
+            ML_SDL_TEXTUREACCESS_STREAMING, cached_w, cached_h);
+        if (!overlay_texture) return;
+        pfn_SetBlendMode(overlay_texture, ML_SDL_BLENDMODE_BLEND);
+        tex_w = cached_w;
+        tex_h = cached_h;
+    }
+
+    pfn_UpdateTexture(overlay_texture, NULL, cached_pixels,
+                      cached_w * (int)sizeof(uint32_t));
+
+    dst.x = cached_x;
+    dst.y = cached_y;
+    dst.w = cached_w;
+    dst.h = cached_h;
+    pfn_RenderCopy(renderer, overlay_texture, NULL, &dst);
 }
 
 /* ── SDL_RenderPresent interposition ────────────────────────────── */
 
 void SDL_RenderPresent(void *renderer) {
     if (__builtin_expect(!real_present, 0)) {
-        real_present = (sdl_render_present_fn)dlsym(RTLD_NEXT, "SDL_RenderPresent");
+        real_present = (fn_SDL_RenderPresent)dlsym(RTLD_NEXT, "SDL_RenderPresent");
         if (!real_present) return;
+        init_sdl_funcs();
     }
 
+    /* Draw overlay INTO the renderer before presenting */
+    if (__builtin_expect(sdl_funcs_ok, 1))
+        draw_overlay(renderer);
+
     real_present(renderer);
-
-    if (__builtin_expect(!fb_ok, 0))
-        init_fb();
-
-    if (fb_ok)
-        blit_overlay();
 }
