@@ -23,29 +23,24 @@
 /* ── Framebuffer state ──────────────────────────────────────────── */
 
 static int fb_fd = -1;
-static uint32_t *fb_mem = NULL;
 static int fb_width  = 0;
 static int fb_height = 0;
-static int fb_stride = 0;   /* in pixels */
-static int fb_mapped_size = 0;
 
 /* Banner state */
 static char   banner_text[300] = {0};
 static time_t banner_expire = 0;
 static int    banner_active = 0;
-static int    banner_drawn = 0;
-static int    banner_x = 0;
-static int    banner_y = 0;
-static int    banner_w = 0;
-static int    banner_h = 0;
-static uint32_t *banner_saved_bg = NULL;
-static uint32_t *banner_snapshot = NULL;
-static uint32_t *banner_work = NULL;
-static size_t banner_buffer_pixels = 0;
+static int    banner_dirty = 0;
+static uint32_t overlay_frame_id = 0;
 
 /* Shared memory for preload hook */
 static menulody_overlay_shm_t *overlay_shm = NULL;
 static int overlay_shm_fd = -1;
+
+/* Startup warmup to avoid publishing during early-boot instability */
+static int overlay_warmup_active = 0;
+static int overlay_first_publish_logged = 0;
+static struct timespec overlay_warmup_deadline = {0, 0};
 
 #ifdef __linux__
 
@@ -68,6 +63,7 @@ static void overlay_shm_clear(void);
 #define OVERLAY_PILL_SIZE                  30
 #define OVERLAY_BUTTON_MARGIN               5
 #define OVERLAY_PILL_PADDING               10
+#define OVERLAY_WARMUP_SECS                30
 
 typedef struct {
     int x;
@@ -99,121 +95,6 @@ static int overlay_device_padding = 10;
 
 static const char *nextui_settings_path(char *buf, size_t buf_size);
 
-
-static uint32_t bgra8888(int r, int g, int b) {
-    return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-}
-
-static uint32_t blend_bgra(uint32_t bg, uint32_t fg, int alpha) {
-    int bg_b = (bg      ) & 0xFF;
-    int bg_g = (bg >>  8) & 0xFF;
-    int bg_r = (bg >> 16) & 0xFF;
-    int fg_b = (fg      ) & 0xFF;
-    int fg_g = (fg >>  8) & 0xFF;
-    int fg_r = (fg >> 16) & 0xFF;
-    int r = (fg_r * alpha + bg_r * (255 - alpha)) / 255;
-    int g = (fg_g * alpha + bg_g * (255 - alpha)) / 255;
-    int b = (fg_b * alpha + bg_b * (255 - alpha)) / 255;
-    return 0xFF000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
-}
-
-static int ensure_banner_buffers(size_t pixels) {
-    if (pixels <= banner_buffer_pixels) return 0;
-
-    uint32_t *new_saved = malloc(pixels * sizeof(uint32_t));
-    uint32_t *new_snap = malloc(pixels * sizeof(uint32_t));
-    uint32_t *new_work = malloc(pixels * sizeof(uint32_t));
-    if (!new_saved || !new_snap || !new_work) {
-        free(new_saved);
-        free(new_snap);
-        free(new_work);
-        return -1;
-    }
-
-    if (banner_saved_bg)
-        memcpy(new_saved, banner_saved_bg, banner_buffer_pixels * sizeof(uint32_t));
-    if (banner_snapshot)
-        memcpy(new_snap, banner_snapshot, banner_buffer_pixels * sizeof(uint32_t));
-    if (banner_work)
-        memcpy(new_work, banner_work, banner_buffer_pixels * sizeof(uint32_t));
-
-    free(banner_saved_bg);
-    free(banner_snapshot);
-    free(banner_work);
-    banner_saved_bg = new_saved;
-    banner_snapshot = new_snap;
-    banner_work = new_work;
-    banner_buffer_pixels = pixels;
-    return 0;
-}
-
-static void copy_fb_rect(int x, int y, int w, int h, uint32_t *dst) {
-    for (int row = 0; row < h; row++) {
-        memcpy(dst + (size_t)row * w,
-               fb_mem + (size_t)(y + row) * fb_stride + x,
-               (size_t)w * sizeof(uint32_t));
-    }
-}
-
-static void write_fb_rect(int x, int y, int w, int h, const uint32_t *src) {
-    for (int row = 0; row < h; row++) {
-        memcpy(fb_mem + (size_t)(y + row) * fb_stride + x,
-               src + (size_t)row * w,
-               (size_t)w * sizeof(uint32_t));
-    }
-}
-
-static int rect_matches_buffer(int x, int y, int w, int h, const uint32_t *buf) {
-    for (int row = 0; row < h; row++) {
-        const uint32_t *fb_row = fb_mem + (size_t)(y + row) * fb_stride + x;
-        const uint32_t *buf_row = buf + (size_t)row * w;
-        if (memcmp(fb_row, buf_row, (size_t)w * sizeof(uint32_t)) != 0)
-            return 0;
-    }
-    return 1;
-}
-
-static void clear_drawn_overlay_if_still_visible(void) {
-    overlay_shm_clear();
-    if (!banner_drawn || !banner_saved_bg || !banner_snapshot || banner_w <= 0 || banner_h <= 0)
-        return;
-    if (rect_matches_buffer(banner_x, banner_y, banner_w, banner_h, banner_snapshot))
-        write_fb_rect(banner_x, banner_y, banner_w, banner_h, banner_saved_bg);
-    banner_drawn = 0;
-}
-
-static void restore_overlay_region_best_effort(void) {
-    size_t pixels = (size_t)banner_w * banner_h;
-    if (!banner_drawn || !banner_saved_bg || !banner_snapshot || !banner_work || pixels == 0)
-        return;
-
-    copy_fb_rect(banner_x, banner_y, banner_w, banner_h, banner_work);
-    for (size_t i = 0; i < pixels; i++) {
-        if (banner_work[i] == banner_snapshot[i])
-            banner_work[i] = banner_saved_bg[i];
-    }
-    write_fb_rect(banner_x, banner_y, banner_w, banner_h, banner_work);
-    overlay_shm_clear();
-    banner_drawn = 0;
-}
-
-static void capture_background_for_redraw(void) {
-    size_t pixels = (size_t)banner_w * banner_h;
-    if (pixels == 0 || !banner_saved_bg || !banner_snapshot || !banner_work)
-        return;
-
-    copy_fb_rect(banner_x, banner_y, banner_w, banner_h, banner_work);
-    if (!banner_drawn) {
-        memcpy(banner_saved_bg, banner_work, pixels * sizeof(uint32_t));
-        return;
-    }
-
-    for (size_t i = 0; i < pixels; i++) {
-        banner_saved_bg[i] = (banner_work[i] == banner_snapshot[i])
-            ? banner_saved_bg[i]
-            : banner_work[i];
-    }
-}
 
 static SDL_Color color_from_hex(const char *hex, SDL_Color fallback) {
     SDL_Color c = fallback;
@@ -638,15 +519,20 @@ static int build_layout(overlay_layout_t *layout) {
     int max_text_w;
     int font_h;
 
-    if (!layout || !fb_mem || !banner_text[0] || !overlay_font) return -1;
+    if (!layout || fb_width <= 0 || fb_height <= 0 || !banner_text[0] || !overlay_font)
+        return -1;
 
     memset(layout, 0, sizeof(*layout));
     pill_h = OVERLAY_PILL_SIZE * overlay_device_scale;
+    if (pill_h > MENULODY_SHM_MAX_H)
+        pill_h = MENULODY_SHM_MAX_H;
     inner_margin = OVERLAY_PILL_PADDING * overlay_device_scale;
     side_margin = overlay_device_padding * overlay_device_scale;
     max_pill_w = fb_width - 2 * side_margin - 2 * pill_h;
     if (max_pill_w < pill_h)
         max_pill_w = fb_width - 2 * side_margin;
+    if (max_pill_w > MENULODY_SHM_MAX_W)
+        max_pill_w = MENULODY_SHM_MAX_W;
     if (max_pill_w <= 0) return -1;
 
     max_text_w = max_pill_w - inner_margin * 2;
@@ -817,34 +703,18 @@ static SDL_Surface *render_overlay_surface(const overlay_layout_t *layout) {
     return surface;
 }
 
-static void blend_surface_over_bgra(SDL_Surface *surface, uint32_t *dst) {
-    int locked = 0;
+/* ── Shared memory for preload hook ─────────────────────────────── */
 
-    if (!surface || !dst) return;
-    if (SDL_MUSTLOCK(surface) && SDL_LockSurface(surface) == 0) locked = 1;
-
-    for (int y = 0; y < surface->h; y++) {
-        for (int x = 0; x < surface->w; x++) {
-            Uint32 *row = (Uint32 *)((Uint8 *)surface->pixels + y * surface->pitch);
-            Uint32 pixel = row[x];
-            Uint8 r, g, b, a;
-            size_t idx = (size_t)y * surface->w + x;
-
-            SDL_GetRGBA(pixel, surface->format, &r, &g, &b, &a);
-            if (a == 0) continue;
-
-            if (a == 255) {
-                dst[idx] = bgra8888(r, g, b);
-            } else {
-                dst[idx] = blend_bgra(dst[idx], bgra8888(r, g, b), a);
-            }
-        }
-    }
-
-    if (locked) SDL_UnlockSurface(surface);
+static void overlay_shm_begin_write(void) {
+    overlay_shm->seq++;
+    __sync_synchronize();
 }
 
-/* ── Shared memory for preload hook ─────────────────────────────── */
+static void overlay_shm_finish_write(void) {
+    __sync_synchronize();
+    overlay_shm->seq++;
+    __sync_synchronize();
+}
 
 static void overlay_shm_init(void) {
     overlay_shm_fd = open(MENULODY_SHM_PATH, O_RDWR | O_CREAT, 0666);
@@ -871,24 +741,23 @@ static void overlay_shm_init(void) {
         return;
     }
 
-    overlay_shm->magic   = MENULODY_SHM_MAGIC;
-    overlay_shm->active  = 0;
-    overlay_shm->version = 0;
+    memset(overlay_shm, 0, sizeof(*overlay_shm));
+    overlay_shm->magic = MENULODY_SHM_MAGIC;
+    overlay_shm->fb_width = fb_width;
+    overlay_shm->fb_height = fb_height;
     __sync_synchronize();
 
     fprintf(stderr, "menulody: overlay: shm ready at %s\n", MENULODY_SHM_PATH);
 }
 
-static void overlay_shm_update(SDL_Surface *surface, int x, int y, int w, int h) {
+static int overlay_shm_update(SDL_Surface *surface, int x, int y, int w, int h) {
     int locked = 0;
 
-    if (!overlay_shm || !surface) return;
-    if (w <= 0 || h <= 0) return;
-    if (w > MENULODY_SHM_MAX_W || h > MENULODY_SHM_MAX_H) return;
+    if (!overlay_shm || !surface) return -1;
+    if (w <= 0 || h <= 0) return -1;
+    if (w > MENULODY_SHM_MAX_W || h > MENULODY_SHM_MAX_H) return -1;
 
-    /* Bump version to signal "write in progress" */
-    overlay_shm->version++;
-    __sync_synchronize();
+    overlay_shm_begin_write();
 
     overlay_shm->x         = x;
     overlay_shm->y         = y;
@@ -917,26 +786,37 @@ static void overlay_shm_update(SDL_Surface *surface, int x, int y, int w, int h)
     if (locked) SDL_UnlockSurface(surface);
 
     overlay_shm->active = 1;
-    __sync_synchronize();
-    /* Final version bump — reader checks v1==v2 for consistency */
-    overlay_shm->version++;
-    __sync_synchronize();
+    overlay_frame_id++;
+    overlay_shm->frame_id = overlay_frame_id;
+    overlay_shm_finish_write();
+    return 0;
 }
 
 static void overlay_shm_clear(void) {
+    int already_clear;
+
     if (!overlay_shm) return;
-    overlay_shm->version++;
-    __sync_synchronize();
+    already_clear = (overlay_shm->active == 0 &&
+                     overlay_shm->x == 0 && overlay_shm->y == 0 &&
+                     overlay_shm->w == 0 && overlay_shm->h == 0);
+    if (already_clear) return;
+
+    overlay_shm_begin_write();
     overlay_shm->active = 0;
-    __sync_synchronize();
-    overlay_shm->version++;
-    __sync_synchronize();
+    overlay_shm->x = 0;
+    overlay_shm->y = 0;
+    overlay_shm->w = 0;
+    overlay_shm->h = 0;
+    overlay_shm->fb_width = fb_width;
+    overlay_shm->fb_height = fb_height;
+    overlay_frame_id++;
+    overlay_shm->frame_id = overlay_frame_id;
+    overlay_shm_finish_write();
 }
 
 static void overlay_shm_cleanup(void) {
     if (overlay_shm) {
-        overlay_shm->active = 0;
-        __sync_synchronize();
+        overlay_shm_clear();
         munmap(overlay_shm, sizeof(menulody_overlay_shm_t));
         overlay_shm = NULL;
     }
@@ -947,31 +827,49 @@ static void overlay_shm_cleanup(void) {
     unlink(MENULODY_SHM_PATH);
 }
 
-static void draw_current_banner(void) {
-    overlay_layout_t layout;
-    SDL_Surface *surface = NULL;
-    size_t pixels;
+static int overlay_warmup_is_elapsed(void) {
+    struct timespec now;
 
-    if (build_layout(&layout) < 0) return;
+    if (!overlay_warmup_active) return 1;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return 1;
 
-    if (banner_drawn &&
-        (banner_x != layout.x || banner_y != layout.y ||
-         banner_w != layout.w || banner_h != layout.h)) {
-        restore_overlay_region_best_effort();
+    if (now.tv_sec > overlay_warmup_deadline.tv_sec) return 1;
+    if (now.tv_sec == overlay_warmup_deadline.tv_sec &&
+        now.tv_nsec >= overlay_warmup_deadline.tv_nsec) {
+        return 1;
     }
 
-    banner_x = layout.x;
-    banner_y = layout.y;
-    banner_w = layout.w;
-    banner_h = layout.h;
-    pixels = (size_t)banner_w * banner_h;
-    if (ensure_banner_buffers(pixels) < 0) {
-        destroy_layout(&layout);
+    return 0;
+}
+
+static void overlay_update_warmup_state(void) {
+    if (!overlay_warmup_active) return;
+    if (!overlay_warmup_is_elapsed()) return;
+
+    overlay_warmup_active = 0;
+    fprintf(stderr, "menulody: overlay: warmup ended after %d seconds\n",
+            OVERLAY_WARMUP_SECS);
+}
+
+static void publish_current_banner(void) {
+    overlay_layout_t layout;
+    SDL_Surface *surface = NULL;
+
+    if (!banner_dirty) return;
+    if (!overlay_shm) return;
+
+    if (overlay_warmup_active) {
+        overlay_shm_clear();
         return;
     }
 
-    capture_background_for_redraw();
-    memcpy(banner_work, banner_saved_bg, pixels * sizeof(uint32_t));
+    if (!banner_active || !banner_text[0]) {
+        overlay_shm_clear();
+        banner_dirty = 0;
+        return;
+    }
+
+    if (build_layout(&layout) < 0) return;
 
     surface = render_overlay_surface(&layout);
     if (!surface) {
@@ -979,14 +877,13 @@ static void draw_current_banner(void) {
         return;
     }
 
-    /* Publish to shared memory for the preload hook */
-    overlay_shm_update(surface, banner_x, banner_y, banner_w, banner_h);
-
-    /* Direct fb write (fallback when preload is not active) */
-    blend_surface_over_bgra(surface, banner_work);
-    write_fb_rect(banner_x, banner_y, banner_w, banner_h, banner_work);
-    copy_fb_rect(banner_x, banner_y, banner_w, banner_h, banner_snapshot);
-    banner_drawn = 1;
+    if (overlay_shm_update(surface, layout.x, layout.y, layout.w, layout.h) == 0) {
+        banner_dirty = 0;
+        if (!overlay_first_publish_logged) {
+            fprintf(stderr, "menulody: overlay: first preload publish committed\n");
+            overlay_first_publish_logged = 1;
+        }
+    }
 
     SDL_FreeSurface(surface);
     destroy_layout(&layout);
@@ -998,7 +895,7 @@ static void draw_current_banner(void) {
 
 int overlay_init(void) {
 #ifdef __linux__
-    fb_fd = open("/dev/fb0", O_RDWR);
+    fb_fd = open("/dev/fb0", O_RDONLY);
     if (fb_fd < 0) {
         fprintf(stderr, "menulody: overlay: cannot open /dev/fb0 (non-fatal)\n");
         return -1;
@@ -1023,33 +920,23 @@ int overlay_init(void) {
         return -1;
     }
 
-    struct fb_fix_screeninfo finfo;
-    if (ioctl(fb_fd, FBIOGET_FSCREENINFO, &finfo) < 0) {
-        perror("menulody: overlay: FBIOGET_FSCREENINFO");
-        close(fb_fd);
-        fb_fd = -1;
-        return -1;
-    }
-
-    fb_stride = (int)(finfo.line_length / 4);
-    fb_mapped_size = (int)(finfo.line_length * vinfo.yres);
-
-    fb_mem = (uint32_t *)mmap(NULL, fb_mapped_size,
-                              PROT_READ | PROT_WRITE, MAP_SHARED,
-                              fb_fd, 0);
-    if (fb_mem == MAP_FAILED) {
-        perror("menulody: overlay: mmap fb0");
-        fb_mem = NULL;
-        close(fb_fd);
-        fb_fd = -1;
-        return -1;
-    }
+    close(fb_fd);
+    fb_fd = -1;
 
     init_overlay_resources();
     overlay_shm_init();
+    if (clock_gettime(CLOCK_MONOTONIC, &overlay_warmup_deadline) == 0) {
+        overlay_warmup_deadline.tv_sec += OVERLAY_WARMUP_SECS;
+        overlay_warmup_active = 1;
+        fprintf(stderr, "menulody: overlay: warmup started for %d seconds\n",
+                OVERLAY_WARMUP_SECS);
+    } else {
+        overlay_warmup_active = 0;
+        perror("menulody: overlay: CLOCK_MONOTONIC");
+    }
 
-    fprintf(stderr, "menulody: overlay: fb0 %dx%d stride=%d bpp=%u\n",
-            fb_width, fb_height, fb_stride, vinfo.bits_per_pixel);
+    fprintf(stderr, "menulody: overlay: fb0 %dx%d bpp=%u\n",
+            fb_width, fb_height, vinfo.bits_per_pixel);
     return 0;
 #else
     return -1;
@@ -1057,43 +944,43 @@ int overlay_init(void) {
 }
 
 void overlay_set_text(const char *text, int duration_secs) {
-#ifdef __linux__
-    if (fb_mem && banner_drawn)
-        restore_overlay_region_best_effort();
-#endif
+    int changed = 0;
 
     if (text && text[0] && duration_secs > 0) {
-        str_copy_trunc(banner_text, sizeof(banner_text), text);
+        if (!banner_active || strcmp(banner_text, text) != 0) {
+            str_copy_trunc(banner_text, sizeof(banner_text), text);
+            changed = 1;
+        }
         banner_active = 1;
         banner_expire = time(NULL) + duration_secs;
     } else {
+        changed = banner_active || banner_text[0];
         banner_text[0] = '\0';
         banner_active = 0;
         banner_expire = 0;
     }
 
-    banner_drawn = 0;
-    banner_x = 0;
-    banner_y = 0;
-    banner_w = 0;
-    banner_h = 0;
+    if (changed) banner_dirty = 1;
+
+#ifdef __linux__
+    overlay_update_warmup_state();
+    publish_current_banner();
+#endif
 }
 
 void overlay_tick(int menu_active) {
 #ifdef __linux__
-    if (!fb_mem || !banner_active) return;
+    (void)menu_active;
 
-    if (time(NULL) >= banner_expire) {
-        clear_drawn_overlay_if_still_visible();
+    if (banner_active && time(NULL) >= banner_expire) {
         banner_active = 0;
         banner_text[0] = '\0';
         banner_expire = 0;
-        return;
+        banner_dirty = 1;
     }
 
-    if (!menu_active) return;
-
-    draw_current_banner();
+    overlay_update_warmup_state();
+    publish_current_banner();
 #else
     (void)menu_active;
 #endif
@@ -1105,28 +992,25 @@ int overlay_is_active(void) {
 
 void overlay_cleanup(void) {
 #ifdef __linux__
-    if (fb_mem && banner_drawn)
-        restore_overlay_region_best_effort();
+    banner_active = 0;
+    banner_text[0] = '\0';
+    banner_expire = 0;
+    banner_dirty = 1;
+    publish_current_banner();
     overlay_shm_cleanup();
-    free(banner_saved_bg);
-    free(banner_snapshot);
-    free(banner_work);
-    banner_saved_bg = NULL;
-    banner_snapshot = NULL;
-    banner_work = NULL;
-    banner_buffer_pixels = 0;
     free_overlay_resources();
-    if (fb_mem) {
-        munmap(fb_mem, fb_mapped_size);
-        fb_mem = NULL;
-    }
     if (fb_fd >= 0) {
         close(fb_fd);
         fb_fd = -1;
     }
 #endif
     banner_active = 0;
-    banner_drawn = 0;
+    banner_dirty = 0;
     banner_text[0] = '\0';
     banner_expire = 0;
+    overlay_frame_id = 0;
+    overlay_warmup_active = 0;
+    overlay_first_publish_logged = 0;
+    overlay_warmup_deadline.tv_sec = 0;
+    overlay_warmup_deadline.tv_nsec = 0;
 }

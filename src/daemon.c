@@ -539,14 +539,10 @@ int daemon_run(void) {
                 break;
         }
 
-        int sleep_iters;
-
         /* Overlay tick */
         overlay_tick(menu_active);
 
-        /* Repaint faster while the overlay is visible so it can keep up with menu scroll redraws. */
-        sleep_iters = (menu_active && overlay_is_active()) ? 2 : 10;
-        for (int i = 0; i < sleep_iters && !quit_flag; i++)
+        for (int i = 0; i < 10 && !quit_flag; i++)
             usleep(10000);
     }
 

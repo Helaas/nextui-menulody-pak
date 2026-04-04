@@ -6,8 +6,9 @@
  * part of the GPU-composed frame and presented atomically — zero flicker.
  *
  * The Menulody daemon renders the pill into a shared-memory file; this hook
- * reads the pixel data, uploads it to an SDL texture, and draws it via
- * SDL_RenderCopy right before the real SDL_RenderPresent.
+ * reads committed overlay frames from shared memory, uploads changed pixel
+ * data to an SDL texture, and draws it via SDL_RenderCopy right before the
+ * real SDL_RenderPresent.
  *
  * SDL functions are resolved at runtime via dlsym (no -lSDL2 linkage needed).
  *
@@ -55,16 +56,18 @@ static int shm_ok;
 
 /* ── Cached overlay (avoid re-reading shm every frame) ──────────── */
 
+static uint32_t staging_pixels[MENULODY_SHM_MAX_W * MENULODY_SHM_MAX_H];
 static uint32_t cached_pixels[MENULODY_SHM_MAX_W * MENULODY_SHM_MAX_H];
 static int cached_x, cached_y, cached_w, cached_h;
 static int cached_active;
-static int cached_version = -1;
+static uint32_t cached_frame_id = UINT32_MAX;
 
 /* ── Cached SDL texture ─────────────────────────────────────────── */
 
 static void *overlay_texture;     /* SDL_Texture* */
 static void *tex_renderer;        /* renderer that created the texture */
 static int   tex_w, tex_h;        /* dimensions of current texture */
+static uint32_t texture_frame_id = UINT32_MAX;
 
 /* ── Init helpers ───────────────────────────────────────────────── */
 
@@ -101,43 +104,64 @@ static void init_shm(void) {
 
 /* ── Overlay cache + draw ───────────────────────────────────────── */
 
-static void refresh_cache(void) {
-    int v1, v2;
+static int refresh_cache(void) {
+    int attempt;
+    uint32_t seq1, seq2;
+    uint32_t new_frame_id;
     int new_active, new_x, new_y, new_w, new_h;
 
-    v1 = shm->version;
-    __sync_synchronize();
+    for (attempt = 0; attempt < 4; attempt++) {
+        seq1 = shm->seq;
+        __sync_synchronize();
+        if (seq1 & 1u)
+            continue;
 
-    new_active = shm->active;
-    new_x      = shm->x;
-    new_y      = shm->y;
-    new_w      = shm->w;
-    new_h      = shm->h;
+        new_frame_id = shm->frame_id;
+        new_active = shm->active;
+        new_x      = shm->x;
+        new_y      = shm->y;
+        new_w      = shm->w;
+        new_h      = shm->h;
 
-    if (new_active && new_w > 0 && new_h > 0 &&
-        new_w <= MENULODY_SHM_MAX_W && new_h <= MENULODY_SHM_MAX_H) {
-        memcpy(cached_pixels, (const void *)shm->pixels,
+        if (new_frame_id != cached_frame_id && new_active) {
+            if (new_w <= 0 || new_h <= 0 ||
+                new_w > MENULODY_SHM_MAX_W || new_h > MENULODY_SHM_MAX_H) {
+                continue;
+            }
+            memcpy(staging_pixels, (const void *)shm->pixels,
+                   (size_t)new_w * (size_t)new_h * sizeof(uint32_t));
+        }
+
+        __sync_synchronize();
+        seq2 = shm->seq;
+        if (seq1 != seq2 || (seq2 & 1u))
+            continue;
+
+        if (new_frame_id == cached_frame_id)
+            return 0;
+
+        if (!new_active) {
+            cached_active = 0;
+            cached_x = 0;
+            cached_y = 0;
+            cached_w = 0;
+            cached_h = 0;
+            cached_frame_id = new_frame_id;
+            return 1;
+        }
+
+        memcpy(cached_pixels, staging_pixels,
                (size_t)new_w * (size_t)new_h * sizeof(uint32_t));
+        cached_active = 1;
+        cached_x = new_x;
+        cached_y = new_y;
+        cached_w = new_w;
+        cached_h = new_h;
+        cached_frame_id = new_frame_id;
+        return 1;
     }
 
-    __sync_synchronize();
-    v2 = shm->version;
-
-    if (v1 != v2) {
-        /* Writer active during our read — keep drawing old cached data.
-         * The previous cache was from a consistent read (or is still the
-         * safe initial state of all-zeros / inactive).  We'll pick up
-         * the new data on the next frame when the writer is done. */
-        return;
-    }
-
-    /* Consistent snapshot — commit to cache. */
-    cached_active = new_active;
-    cached_x      = new_x;
-    cached_y      = new_y;
-    cached_w      = new_w;
-    cached_h      = new_h;
-    cached_version = v1;
+    return 0;
 }
 
 static void draw_overlay(void *renderer) {
@@ -150,8 +174,7 @@ static void draw_overlay(void *renderer) {
         if (!shm_ok) return;
     }
 
-    if (shm->version != cached_version)
-        refresh_cache();
+    refresh_cache();
 
     if (!cached_active || cached_w <= 0 || cached_h <= 0)
         return;
@@ -161,6 +184,7 @@ static void draw_overlay(void *renderer) {
         (tex_renderer != renderer || tex_w != cached_w || tex_h != cached_h)) {
         pfn_DestroyTexture(overlay_texture);
         overlay_texture = NULL;
+        texture_frame_id = UINT32_MAX;
     }
 
     if (!overlay_texture) {
@@ -172,10 +196,14 @@ static void draw_overlay(void *renderer) {
         tex_renderer = renderer;
         tex_w = cached_w;
         tex_h = cached_h;
+        texture_frame_id = UINT32_MAX;
     }
 
-    pfn_UpdateTexture(overlay_texture, NULL, cached_pixels,
-                      cached_w * (int)sizeof(uint32_t));
+    if (texture_frame_id != cached_frame_id) {
+        pfn_UpdateTexture(overlay_texture, NULL, cached_pixels,
+                          cached_w * (int)sizeof(uint32_t));
+        texture_frame_id = cached_frame_id;
+    }
 
     dst.x = cached_x;
     dst.y = cached_y;

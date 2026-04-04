@@ -10,7 +10,8 @@
 
 typedef struct {
     uint32_t     magic;           /* MENULODY_SHM_MAGIC when valid */
-    volatile int version;         /* Incremented after each update */
+    volatile uint32_t seq;        /* Seqlock: odd while writing, even when committed */
+    volatile uint32_t frame_id;   /* Incremented once per committed overlay state change */
     int          active;          /* 1 = draw overlay, 0 = skip */
     int          x, y, w, h;     /* Position and size on screen */
     int          fb_width;        /* Expected screen width (sanity) */
