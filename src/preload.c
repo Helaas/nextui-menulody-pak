@@ -63,7 +63,8 @@ static int cached_version = -1;
 /* ── Cached SDL texture ─────────────────────────────────────────── */
 
 static void *overlay_texture;     /* SDL_Texture* */
-static int   tex_w, tex_h;       /* dimensions of current texture */
+static void *tex_renderer;        /* renderer that created the texture */
+static int   tex_w, tex_h;        /* dimensions of current texture */
 
 /* ── Init helpers ───────────────────────────────────────────────── */
 
@@ -102,31 +103,40 @@ static void init_shm(void) {
 
 static void refresh_cache(void) {
     int v1, v2;
+    int new_active, new_x, new_y, new_w, new_h;
 
     v1 = shm->version;
     __sync_synchronize();
 
-    cached_active = shm->active;
-    cached_x      = shm->x;
-    cached_y      = shm->y;
-    cached_w      = shm->w;
-    cached_h      = shm->h;
+    new_active = shm->active;
+    new_x      = shm->x;
+    new_y      = shm->y;
+    new_w      = shm->w;
+    new_h      = shm->h;
 
-    if (cached_active && cached_w > 0 && cached_h > 0 &&
-        cached_w <= MENULODY_SHM_MAX_W && cached_h <= MENULODY_SHM_MAX_H) {
+    if (new_active && new_w > 0 && new_h > 0 &&
+        new_w <= MENULODY_SHM_MAX_W && new_h <= MENULODY_SHM_MAX_H) {
         memcpy(cached_pixels, (const void *)shm->pixels,
-               (size_t)cached_w * (size_t)cached_h * sizeof(uint32_t));
+               (size_t)new_w * (size_t)new_h * sizeof(uint32_t));
     }
 
     __sync_synchronize();
     v2 = shm->version;
 
     if (v1 != v2) {
-        /* Writer was active during our read — stale, skip this frame. */
-        cached_active = 0;
+        /* Writer active during our read — keep drawing old cached data.
+         * The previous cache was from a consistent read (or is still the
+         * safe initial state of all-zeros / inactive).  We'll pick up
+         * the new data on the next frame when the writer is done. */
         return;
     }
 
+    /* Consistent snapshot — commit to cache. */
+    cached_active = new_active;
+    cached_x      = new_x;
+    cached_y      = new_y;
+    cached_w      = new_w;
+    cached_h      = new_h;
     cached_version = v1;
 }
 
@@ -146,8 +156,9 @@ static void draw_overlay(void *renderer) {
     if (!cached_active || cached_w <= 0 || cached_h <= 0)
         return;
 
-    /* Recreate texture if dimensions changed */
-    if (overlay_texture && (tex_w != cached_w || tex_h != cached_h)) {
+    /* Recreate texture if renderer or dimensions changed */
+    if (overlay_texture &&
+        (tex_renderer != renderer || tex_w != cached_w || tex_h != cached_h)) {
         pfn_DestroyTexture(overlay_texture);
         overlay_texture = NULL;
     }
@@ -158,6 +169,7 @@ static void draw_overlay(void *renderer) {
             ML_SDL_TEXTUREACCESS_STREAMING, cached_w, cached_h);
         if (!overlay_texture) return;
         pfn_SetBlendMode(overlay_texture, ML_SDL_BLENDMODE_BLEND);
+        tex_renderer = renderer;
         tex_w = cached_w;
         tex_h = cached_h;
     }
