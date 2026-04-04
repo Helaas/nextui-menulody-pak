@@ -56,7 +56,8 @@ int monitor_is_menu_active(void) {
                 if (fgets(comm, sizeof(comm), f)) {
                     comm[strcspn(comm, "\n")] = '\0';
                     fclose(f);
-                    if (strcmp(comm, "nextui.elf") == 0)
+                    if (strcmp(comm, "nextui.elf") == 0 ||
+                        strcmp(comm, "nextui.elf.real") == 0)
                         return 1;
                 } else {
                     fclose(f);
@@ -66,8 +67,10 @@ int monitor_is_menu_active(void) {
         cached_pid = 0;
     }
 
-    /* Full scan */
+    /* Full scan — check both names (wrapper renames binary) */
     cached_pid = find_process("nextui.elf");
+    if (!cached_pid)
+        cached_pid = find_process("nextui.elf.real");
     return (cached_pid > 0) ? 1 : 0;
 #endif
 }

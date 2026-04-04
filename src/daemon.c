@@ -193,6 +193,7 @@ int daemon_run(void) {
     }
 
     overlay_init(); /* non-fatal */
+    hooks_install_preload(); /* non-fatal, takes effect on next nextui restart */
 
     /* Install hooks if not already present */
     hooks_install_playback();

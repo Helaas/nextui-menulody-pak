@@ -13,7 +13,7 @@ DIST_DIR := $(BUILD_DIR)/release
 STAGING_DIR := $(BUILD_DIR)/staging
 CACHE_DIR := .cache
 NEXTUI_PREVIEW_CACHE := $(CACHE_DIR)/nextui-preview
-SRC_FILES := $(shell find src third_party/cJSON -name '*.c' -print | sort)
+SRC_FILES := $(shell find src third_party/cJSON -name '*.c' ! -name 'preload.c' -print | sort)
 
 TG5040_TOOLCHAIN := ghcr.io/loveretro/tg5040-toolchain:latest
 TG5050_TOOLCHAIN := ghcr.io/loveretro/tg5050-toolchain:latest
@@ -107,6 +107,9 @@ do-package:
 	@rm -rf $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak
 	@mkdir -p $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak
 	@cp $(BUILD_DIR)/$(PLATFORM)/$(APP_NAME) $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/
+	@if [ -f $(BUILD_DIR)/$(PLATFORM)/menulody_overlay.so ]; then \
+		cp $(BUILD_DIR)/$(PLATFORM)/menulody_overlay.so $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/; \
+	fi
 	@cp launch.sh pak.json $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/
 	@if [ -f README.md ]; then cp README.md $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/; fi
 	@if [ -f LICENSE ]; then cp LICENSE $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/; fi
