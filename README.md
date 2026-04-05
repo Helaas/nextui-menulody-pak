@@ -45,6 +45,12 @@ Important screens:
 - `Library`
   - `A`: start single-song loop mode for the selected track
   - `Y`: preview / stop preview
+- `Now Playing`
+  - `L2`: previous track
+  - `R2`: next track
+  - `X`: shuffle
+  - `Y`: repeat
+  - `A`: play / pause
 - `Playlists`
   - `A`: activate `All Songs` or the selected saved playlist
   - `X`: delete saved playlist

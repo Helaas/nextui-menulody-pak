@@ -133,16 +133,16 @@ static void show_now_playing(void) {
         } else {
             ap_footer_item footer[] = {
                 {AP_BTN_B, "Back", false, NULL},
-                {AP_BTN_L1, "Prev", false, NULL},
-                {AP_BTN_R1, "Next", false, NULL},
+                {AP_BTN_L2, "Prev", false, NULL},
+                {AP_BTN_R2, "Next", false, NULL},
                 {AP_BTN_X, "Shuffle", false, NULL},
                 {AP_BTN_Y, "Repeat", false, NULL},
                 {AP_BTN_A, "Play/Pause", true, NULL},
             };
             opts.footer = footer;
             opts.footer_count = 6;
-            opts.action_button = AP_BTN_L1;
-            opts.secondary_action_button = AP_BTN_R1;
+            opts.action_button = AP_BTN_L2;
+            opts.secondary_action_button = AP_BTN_R2;
             opts.tertiary_action_button = AP_BTN_X;
             opts.confirm_button = AP_BTN_Y;
             ap_list_result result;
@@ -157,11 +157,11 @@ static void show_now_playing(void) {
                         ipc_client_send(IPC_CMD_TOGGLE, 0);
                         break;
                     case AP_ACTION_TRIGGERED:
-                        /* L1 — previous track */
+                        /* L2 — previous track */
                         ipc_client_send(IPC_CMD_PREV, 0);
                         break;
                     case AP_ACTION_SECONDARY_TRIGGERED:
-                        /* R1 — next track */
+                        /* R2 — next track */
                         ipc_client_send(IPC_CMD_NEXT, 0);
                         break;
                     case AP_ACTION_TERTIARY_TRIGGERED:
