@@ -63,7 +63,7 @@ static void overlay_shm_clear(void);
 #define OVERLAY_PILL_SIZE                  30
 #define OVERLAY_BUTTON_MARGIN               5
 #define OVERLAY_PILL_PADDING               10
-#define OVERLAY_WARMUP_SECS                30
+#define OVERLAY_WARMUP_SECS                5
 
 typedef struct {
     int x;
