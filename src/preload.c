@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <sys/mman.h>
 
@@ -34,6 +35,8 @@
 /* ── SDL function pointers (resolved lazily via dlsym) ──────────── */
 
 typedef void  (*fn_SDL_RenderPresent)(void *);
+typedef void  (*fn_SDL_Delay)(uint32_t);
+typedef int   (*fn_SDL_PollEvent)(void *);
 typedef void *(*fn_SDL_CreateTexture)(void *, uint32_t, int, int, int);
 typedef int   (*fn_SDL_UpdateTexture)(void *, const void *, const void *, int);
 typedef int   (*fn_SDL_SetTextureBlendMode)(void *, int);
@@ -41,6 +44,8 @@ typedef int   (*fn_SDL_RenderCopy)(void *, void *, const void *, const void *);
 typedef void  (*fn_SDL_DestroyTexture)(void *);
 
 static fn_SDL_RenderPresent       real_present;
+static fn_SDL_Delay               real_delay;
+static fn_SDL_PollEvent           real_poll_event;
 static fn_SDL_CreateTexture       pfn_CreateTexture;
 static fn_SDL_UpdateTexture       pfn_UpdateTexture;
 static fn_SDL_SetTextureBlendMode pfn_SetBlendMode;
@@ -69,9 +74,22 @@ static void *tex_renderer;        /* renderer that created the texture */
 static int   tex_w, tex_h;        /* dimensions of current texture */
 static uint32_t texture_frame_id = UINT32_MAX;
 
+/* ── Idle-present tracking ─────────────────────────────────────── */
+
+static void *last_renderer;
+static pid_t render_tid = -1;
+static uint32_t last_present_frame_id = UINT32_MAX;
+static __thread int force_present_guard;
+
 /* ── Init helpers ───────────────────────────────────────────────── */
 
+static pid_t current_tid(void) {
+    return (pid_t)syscall(SYS_gettid);
+}
+
 static void init_sdl_funcs(void) {
+    real_delay       = (fn_SDL_Delay)dlsym(RTLD_NEXT, "SDL_Delay");
+    real_poll_event  = (fn_SDL_PollEvent)dlsym(RTLD_NEXT, "SDL_PollEvent");
     pfn_CreateTexture = (fn_SDL_CreateTexture)dlsym(RTLD_NEXT, "SDL_CreateTexture");
     pfn_UpdateTexture = (fn_SDL_UpdateTexture)dlsym(RTLD_NEXT, "SDL_UpdateTexture");
     pfn_SetBlendMode  = (fn_SDL_SetTextureBlendMode)dlsym(RTLD_NEXT, "SDL_SetTextureBlendMode");
@@ -103,6 +121,34 @@ static void init_shm(void) {
 }
 
 /* ── Overlay cache + draw ───────────────────────────────────────── */
+
+static int read_committed_frame_id(uint32_t *frame_id) {
+    int attempt;
+
+    for (attempt = 0; attempt < 4; attempt++) {
+        uint32_t seq1;
+        uint32_t seq2;
+        uint32_t id;
+
+        if (!shm || !shm_ok) return -1;
+
+        seq1 = shm->seq;
+        __sync_synchronize();
+        if (seq1 & 1u)
+            continue;
+
+        id = shm->frame_id;
+
+        __sync_synchronize();
+        seq2 = shm->seq;
+        if (seq1 == seq2 && !(seq2 & 1u)) {
+            if (frame_id) *frame_id = id;
+            return 0;
+        }
+    }
+
+    return -1;
+}
 
 static int refresh_cache(void) {
     int attempt;
@@ -212,6 +258,32 @@ static void draw_overlay(void *renderer) {
     pfn_RenderCopy(renderer, overlay_texture, NULL, &dst);
 }
 
+static void maybe_force_idle_present(void) {
+    uint32_t frame_id;
+
+    if (force_present_guard) return;
+    if (!last_renderer || render_tid < 0) return;
+    if (!real_present) return;
+    if (current_tid() != render_tid) return;
+
+    if (!shm || !shm_ok) {
+        if (shm_fd >= 0) return;
+        init_shm();
+        if (!shm_ok) return;
+    }
+
+    if (read_committed_frame_id(&frame_id) != 0) return;
+    if (frame_id == last_present_frame_id) return;
+
+    force_present_guard = 1;
+    if (__builtin_expect(sdl_funcs_ok, 1))
+        draw_overlay(last_renderer);
+    real_present(last_renderer);
+    if (cached_frame_id != UINT32_MAX)
+        last_present_frame_id = cached_frame_id;
+    force_present_guard = 0;
+}
+
 /* ── SDL_RenderPresent interposition ────────────────────────────── */
 
 void SDL_RenderPresent(void *renderer) {
@@ -221,9 +293,37 @@ void SDL_RenderPresent(void *renderer) {
         init_sdl_funcs();
     }
 
+    last_renderer = renderer;
+    render_tid = current_tid();
+
     /* Draw overlay INTO the renderer before presenting */
     if (__builtin_expect(sdl_funcs_ok, 1))
         draw_overlay(renderer);
 
     real_present(renderer);
+    if (cached_frame_id != UINT32_MAX)
+        last_present_frame_id = cached_frame_id;
+}
+
+void SDL_Delay(uint32_t ms) {
+    if (__builtin_expect(!real_delay, 0)) {
+        real_delay = (fn_SDL_Delay)dlsym(RTLD_NEXT, "SDL_Delay");
+        if (!real_delay) {
+            usleep((useconds_t)ms * 1000u);
+            return;
+        }
+    }
+
+    maybe_force_idle_present();
+    real_delay(ms);
+}
+
+int SDL_PollEvent(void *event) {
+    if (__builtin_expect(!real_poll_event, 0)) {
+        real_poll_event = (fn_SDL_PollEvent)dlsym(RTLD_NEXT, "SDL_PollEvent");
+        if (!real_poll_event) return 0;
+    }
+
+    maybe_force_idle_present();
+    return real_poll_event(event);
 }
