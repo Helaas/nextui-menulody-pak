@@ -24,8 +24,4 @@ bool hooks_autostart_installed(void);
 /* Apply hook state based on config */
 int hooks_apply_config(bool auto_start);
 
-/* Install/uninstall LD_PRELOAD wrapper around nextui.elf for flicker-free overlay */
-int hooks_install_preload(void);
-int hooks_uninstall_preload(void);
-
 #endif /* MENULODY_HOOKS_H */

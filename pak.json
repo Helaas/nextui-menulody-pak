@@ -2,7 +2,7 @@
   "name": "Menulody",
   "version": "v1.0.0",
   "type": "TOOL",
-  "description": "Background music player for NextUI. Play MP3 and WAV files while browsing your menu, with playlists and now-playing overlay.",
+  "description": "Background music player for NextUI. Play MP3 and WAV files while browsing your menu, with playlists and optional Varnish-powered now-playing overlay.",
   "author": "Helaas",
   "repo_url": "https://github.com/Helaas/nextui-menulody-pak",
   "release_filename": "Menulody.pakz",

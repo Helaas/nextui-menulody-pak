@@ -13,7 +13,7 @@ DIST_DIR := $(BUILD_DIR)/release
 STAGING_DIR := $(BUILD_DIR)/staging
 CACHE_DIR := .cache
 NEXTUI_PREVIEW_CACHE := $(CACHE_DIR)/nextui-preview
-SRC_FILES := $(shell find src third_party/cJSON -name '*.c' ! -name 'preload.c' -print | sort)
+SRC_FILES := $(shell find src third_party/cJSON -name '*.c' -print | sort)
 
 TG5040_TOOLCHAIN := ghcr.io/loveretro/tg5040-toolchain:latest
 TG5050_TOOLCHAIN := ghcr.io/loveretro/tg5050-toolchain:latest
@@ -22,7 +22,7 @@ ADB ?= adb
 
 COMMON_INCLUDES := -I$(APOSTROPHE_DIR)/include -Ithird_party/cJSON -Ithird_party/minimp3 -Isrc
 
-.PHONY: all native mac run-mac tg5040 tg5050 my355 \
+.PHONY: all native mac run-mac tg5040 tg5050 my355 test test-varnish-client \
 	package package-tg5040 package-tg5050 package-my355 do-package \
 	deploy deploy-platform clean help update-apostrophe \
 	setup-nextui-preview-cache clean-nextui-preview-cache
@@ -32,6 +32,7 @@ COMMON_INCLUDES := -I$(APOSTROPHE_DIR)/include -Ithird_party/cJSON -Ithird_party
 native: mac
 run-native: run-mac
 all: tg5040 tg5050 my355
+test: test-varnish-client
 
 # ── Submodule auto-init ────────────────────────────────────
 
@@ -58,6 +59,13 @@ mac: $(APOSTROPHE_DIR)/include/apostrophe.h
 		$(SRC_FILES) \
 		$(shell pkg-config --libs sdl2 SDL2_ttf SDL2_image) \
 		-lm -lpthread
+
+test-varnish-client:
+	@mkdir -p $(BUILD_DIR)/tests
+	cc -std=gnu11 -O0 -g -Wall -Wextra -Isrc \
+		-o $(BUILD_DIR)/tests/varnish_client_tests \
+		tests/varnish_client_tests.c src/varnish_client.c
+	./$(BUILD_DIR)/tests/varnish_client_tests
 
 run-mac: mac
 	./$(BUILD_DIR)/mac/$(APP_NAME)
@@ -107,9 +115,6 @@ do-package:
 	@rm -rf $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak
 	@mkdir -p $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak
 	@cp $(BUILD_DIR)/$(PLATFORM)/$(APP_NAME) $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/
-	@if [ -f $(BUILD_DIR)/$(PLATFORM)/menulody_overlay.so ]; then \
-		cp $(BUILD_DIR)/$(PLATFORM)/menulody_overlay.so $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/; \
-	fi
 	@cp launch.sh pak.json $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/
 	@if [ -f README.md ]; then cp README.md $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/; fi
 	@if [ -f LICENSE ]; then cp LICENSE $(BUILD_DIR)/$(PLATFORM)/$(PAK_NAME).pak/; fi

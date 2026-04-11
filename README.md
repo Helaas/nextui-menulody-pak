@@ -7,6 +7,7 @@ Menulody is a background music pak for NextUI. It plays MP3 and WAV files while 
 1. Copy `Menulody.pak` to `Tools/<platform>/` on your SD card.
 2. Launch Menulody once from the Tools menu.
 3. Add music to your library folder, or point Menulody at additional folders from Settings.
+4. Optional: install and enable `Varnish.pak` if you want the now-playing overlay pill.
 
 Supported platforms:
 
@@ -73,7 +74,7 @@ You can configure:
 - volume
 - pause on pak launch
 - auto-start daemon at boot
-- now-playing overlay duration
+- now-playing overlay duration via `Varnish.pak`
 
 Music folders are scanned recursively.
 
@@ -93,6 +94,8 @@ The now-playing pill appears:
 - when the actual song changes
 
 It does not reappear when the same song loops in repeat-one mode.
+
+This overlay is provided through `Varnish.pak`. Menulody playback still works without Varnish, but the pill will only appear when Varnish is installed and enabled.
 
 ## Auto Pause / Resume
 
@@ -117,6 +120,12 @@ If music does not resume:
 - open Menulody once to ensure hooks are installed
 - confirm the daemon is running with `menulody --status`
 - try disabling and re-enabling `Auto-Start Daemon`
+
+If the now-playing overlay does not appear:
+
+- confirm `Varnish.pak` is installed for your platform
+- open `Varnish.pak` and ensure it is enabled
+- keep Menulody's `Now Playing Overlay` setting turned on
 
 If playlists look empty:
 

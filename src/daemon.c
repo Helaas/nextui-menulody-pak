@@ -3,10 +3,10 @@
 #include "playlist.h"
 #include "monitor.h"
 #include "ipc.h"
-#include "overlay.h"
 #include "config.h"
 #include "hooks.h"
 #include "strutil.h"
+#include "varnish_client.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,7 +112,7 @@ static void start_current_track(void) {
     const char *name = playlist_current_name(&playlist);
     if (name && path && config.overlay_duration > 0
         && (!overlay_has_shown || strcmp(last_overlay_track_path, path) != 0)) {
-        overlay_set_text(name, config.overlay_duration);
+        (void)varnish_client_show_pill(name, config.overlay_duration);
         str_copy_trunc(last_overlay_track_path, sizeof(last_overlay_track_path), path);
         overlay_has_shown = 1;
     }
@@ -191,9 +191,6 @@ int daemon_run(void) {
         fprintf(stderr, "menulody: IPC init failed\n");
         goto cleanup;
     }
-
-    overlay_init(); /* non-fatal */
-    hooks_install_preload(); /* non-fatal, takes effect on next nextui restart */
 
     /* Install hooks if not already present */
     hooks_install_playback();
@@ -539,9 +536,6 @@ int daemon_run(void) {
                 break;
         }
 
-        /* Overlay tick */
-        overlay_tick(menu_active);
-
         for (int i = 0; i < 10 && !quit_flag; i++)
             usleep(10000);
     }
@@ -551,7 +545,7 @@ cleanup:
     player_destroy(&player);
     config_save(&config);
     playlist_free(&playlist);
-    overlay_cleanup();
+    (void)varnish_client_hide();
     ipc_daemon_cleanup();
     return 0;
 }

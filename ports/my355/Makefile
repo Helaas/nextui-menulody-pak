@@ -3,7 +3,7 @@ SHELL := /bin/bash
 CROSS_COMPILE ?= aarch64-nextui-linux-gnu-
 CC := $(CROSS_COMPILE)gcc
 STRIP := $(CROSS_COMPILE)strip
-SRC := $(shell find /workspace/src /workspace/third_party/cJSON -name '*.c' ! -name 'preload.c' -print | sort)
+SRC := $(shell find /workspace/src /workspace/third_party/cJSON -name '*.c' -print | sort)
 INCLUDES := -I/workspace/third_party/apostrophe/include -I/workspace/third_party/cJSON -I/workspace/third_party/minimp3 -I/workspace/src
 PKG_CONFIG := pkg-config
 SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags sdl2)
@@ -17,19 +17,9 @@ CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter \
 
 LDFLAGS := $(SDL_LDFLAGS) -Wl,--gc-sections -lpthread -lm
 
-all: $(BUILD_DIR)/menulody $(BUILD_DIR)/menulody_overlay.so
+all: $(BUILD_DIR)/menulody
 
 $(BUILD_DIR)/menulody: $(SRC)
 	@mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDFLAGS)
-	$(STRIP) $@
-
-$(BUILD_DIR)/menulody_overlay.so: /workspace/src/preload.c /workspace/src/overlay_shm.h
-	@mkdir -p $(BUILD_DIR)
-	$(CC) -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter \
-		-mcpu=cortex-a55 -mtune=cortex-a55 \
-		-DPLATFORM_MY355 \
-		-fPIC -shared \
-		-I/workspace/src \
-		-o $@ /workspace/src/preload.c -ldl
 	$(STRIP) $@

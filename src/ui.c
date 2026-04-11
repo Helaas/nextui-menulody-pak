@@ -7,6 +7,7 @@
 #include "playlist.h"
 #include "hooks.h"
 #include "strutil.h"
+#include "varnish_client.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,8 +82,9 @@ static void show_now_playing(void) {
 
         char subtitle[128];
         if (st.previewing) {
-            snprintf(subtitle, sizeof(subtitle), "Previewing | Source: %s",
-                     st.playlist_name[0] ? st.playlist_name : "Unknown");
+            str_copy_trunc(subtitle, sizeof(subtitle), "Previewing | Source: ");
+            str_append(subtitle, sizeof(subtitle),
+                       st.playlist_name[0] ? st.playlist_name : "Unknown");
         } else if (st.single_track) {
             snprintf(subtitle, sizeof(subtitle), "%s | Single Song Loop",
                      st.playing ? "Playing" : "Paused");
@@ -512,7 +514,7 @@ static void show_settings(void) {
         {.label = "Auto-Start Daemon",   .type = AP_OPT_STANDARD,
          .options = auto_start_opts,     .option_count = 2,
          .selected_option = cfg.auto_start ? 1 : 0},
-        {.label = "Now Playing Overlay", .type = AP_OPT_STANDARD,
+        {.label = "Now Playing Overlay (Varnish)", .type = AP_OPT_STANDARD,
          .options = overlay_opts,        .option_count = 5,
          .selected_option = cfg.overlay_duration == 0 ? 0 :
                            cfg.overlay_duration <= 3 ? 1 :
@@ -580,6 +582,12 @@ static void show_settings(void) {
                     ipc_client_send(IPC_CMD_RELOAD_CONFIG, 0);
             }
             hooks_apply_config(cfg.auto_start);
+            if (cfg.overlay_duration > 0 &&
+                (!varnish_client_is_installed() || !varnish_client_is_running())) {
+                show_info_message("Settings saved.\n\n"
+                                  "Now Playing overlay requires Varnish.pak to be installed and enabled.\n"
+                                  "Music playback will still work without it.");
+            }
             return;
         }
     }
