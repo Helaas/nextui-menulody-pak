@@ -151,6 +151,42 @@ static const char *preview_action_label(const ipc_status_t *st,
     return "Preview";
 }
 
+typedef struct {
+    const char    **paths;
+    int             path_count;
+    ap_footer_item *footer;
+    int             footer_index;
+    uint32_t        last_status_poll_ms;
+    ipc_status_t    status;
+    int             have_status;
+} preview_footer_context_t;
+
+static void update_preview_footer(ap_list_opts *opts, int cursor, void *userdata) {
+    preview_footer_context_t *ctx = userdata;
+    const char *selected_path = NULL;
+    uint32_t now = SDL_GetTicks();
+
+    (void)opts;
+
+    if (!ctx || !ctx->footer || ctx->footer_index < 0) return;
+
+    if (cursor >= 0 && cursor < ctx->path_count)
+        selected_path = ctx->paths[cursor];
+
+    if (!ctx->have_status || now - ctx->last_status_poll_ms >= 50) {
+        if (daemon_ready() && ipc_client_read_status(&ctx->status) == 0) {
+            ctx->have_status = 1;
+        } else {
+            memset(&ctx->status, 0, sizeof(ctx->status));
+            ctx->have_status = 1;
+        }
+        ctx->last_status_poll_ms = now;
+    }
+
+    ctx->footer[ctx->footer_index].label =
+        preview_action_label(&ctx->status, selected_path);
+}
+
 static void wait_for_menu_music_enabled(int enabled) {
     if (!daemon_ready()) return;
 
@@ -490,17 +526,19 @@ static void show_song_selector(void) {
     snprintf(header, sizeof(header), "Choose Song (%d)", lib.count);
     int last_index = 0;
     int last_visible = 0;
+    preview_footer_context_t preview_ctx = {
+        .paths = (const char **)lib.paths,
+        .path_count = lib.count,
+        .footer_index = 1,
+    };
 
     for (;;) {
-        ipc_status_t st = poll_status_fresh();
-        const char *selected_path = (last_index >= 0 && last_index < lib.count)
-            ? lib.paths[last_index] : NULL;
-        const char *preview_label = preview_action_label(&st, selected_path);
         ap_footer_item footer[] = {
             {AP_BTN_B, "Back", false, NULL},
-            {AP_BTN_Y, preview_label, false, NULL},
+            {AP_BTN_Y, "Preview", false, NULL},
             {AP_BTN_A, "Loop Song", true, NULL},
         };
+        preview_ctx.footer = footer;
 
         ap_list_opts opts = ap_list_default_opts(header, items, lib.count);
         opts.footer = footer;
@@ -508,6 +546,8 @@ static void show_song_selector(void) {
         opts.secondary_action_button = AP_BTN_Y;
         opts.initial_index = last_index;
         opts.visible_start_index = last_visible;
+        opts.footer_update = update_preview_footer;
+        opts.footer_update_userdata = &preview_ctx;
 
         ap_list_result result;
         int rc = ap_list(&opts, &result);
@@ -596,18 +636,20 @@ static void show_playlist_editor(const char *playlist_name) {
     }
     int last_index = 0;
     int last_visible = 0;
+    preview_footer_context_t preview_ctx = {
+        .paths = (const char **)lib.paths,
+        .path_count = lib.count,
+        .footer_index = 2,
+    };
 
     for (;;) {
-        ipc_status_t st = poll_status_fresh();
-        const char *selected_path = (last_index >= 0 && last_index < lib.count)
-            ? lib.paths[last_index] : NULL;
-        const char *preview_label = preview_action_label(&st, selected_path);
         ap_footer_item footer[] = {
             {AP_BTN_B, "Cancel", false, NULL},
             {AP_BTN_A, "Toggle", false, NULL},
-            {AP_BTN_Y, preview_label, false, NULL},
+            {AP_BTN_Y, "Preview", false, NULL},
             {AP_BTN_START, "Save", true, NULL},
         };
+        preview_ctx.footer = footer;
 
         ap_list_opts opts = ap_list_default_opts(header, items, lib.count);
         opts.footer = footer;
@@ -617,6 +659,8 @@ static void show_playlist_editor(const char *playlist_name) {
         opts.secondary_action_button = AP_BTN_Y;
         opts.initial_index = last_index;
         opts.visible_start_index = last_visible;
+        opts.footer_update = update_preview_footer;
+        opts.footer_update_userdata = &preview_ctx;
 
         ap_list_result result;
         rc = ap_list(&opts, &result);
