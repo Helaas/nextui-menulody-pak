@@ -38,55 +38,75 @@ int ipc_daemon_init(void) {
 }
 
 ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size) {
+    static char buf[2048];
+    static int  buf_len = 0;
+
     if (fifo_fd < 0) return IPC_CMD_NONE;
-
-    char buf[512];
-    ssize_t n = read(fifo_fd, buf, sizeof(buf) - 1);
-    if (n <= 0) return IPC_CMD_NONE;
-    buf[n] = '\0';
-
-    /* Trim trailing newline */
-    char *nl = strchr(buf, '\n');
-    if (nl) *nl = '\0';
 
     if (out_int_arg) *out_int_arg = 0;
     if (out_str_arg && str_arg_size > 0) out_str_arg[0] = '\0';
 
-    if (strcmp(buf, "PLAY")         == 0) return IPC_CMD_PLAY;
-    if (strcmp(buf, "PAUSE")        == 0) return IPC_CMD_PAUSE;
-    if (strcmp(buf, "TOGGLE")       == 0) return IPC_CMD_TOGGLE;
-    if (strcmp(buf, "NEXT")         == 0) return IPC_CMD_NEXT;
-    if (strcmp(buf, "PREV")         == 0) return IPC_CMD_PREV;
-    if (strcmp(buf, "SHUFFLE")      == 0) return IPC_CMD_SHUFFLE;
-    if (strcmp(buf, "REPEAT")       == 0) return IPC_CMD_REPEAT;
-    if (strcmp(buf, "RESCAN")       == 0) return IPC_CMD_RESCAN;
-    if (strcmp(buf, "RELOAD_CONFIG") == 0) return IPC_CMD_RELOAD_CONFIG;
-    if (strcmp(buf, "STOP_PREVIEW") == 0) return IPC_CMD_STOP_PREVIEW;
-    if (strcmp(buf, "RESUME")       == 0) return IPC_CMD_RESUME;
-    if (strcmp(buf, "STATUS")       == 0) return IPC_CMD_STATUS;
-    if (strcmp(buf, "QUIT")         == 0) return IPC_CMD_QUIT;
+    /* Append any new data from the FIFO into the persistent buffer */
+    if (buf_len < (int)sizeof(buf) - 1) {
+        ssize_t n = read(fifo_fd, buf + buf_len, sizeof(buf) - 1 - buf_len);
+        if (n > 0) buf_len += (int)n;
+    }
 
-    if (strncmp(buf, "SELECT ", 7) == 0) {
-        if (out_int_arg) *out_int_arg = atoi(buf + 7);
+    if (buf_len <= 0) return IPC_CMD_NONE;
+    buf[buf_len] = '\0';
+
+    /* Extract the first complete newline-terminated command */
+    char *nl = strchr(buf, '\n');
+    if (!nl) return IPC_CMD_NONE;
+
+    *nl = '\0';
+    char line[512];
+    size_t line_len = (size_t)(nl - buf);
+    if (line_len >= sizeof(line)) line_len = sizeof(line) - 1;
+    memcpy(line, buf, line_len);
+    line[line_len] = '\0';
+
+    /* Shift remaining data to the front of the buffer */
+    int consumed = (int)(nl - buf) + 1;
+    buf_len -= consumed;
+    if (buf_len > 0)
+        memmove(buf, nl + 1, buf_len);
+
+    if (strcmp(line, "PLAY")         == 0) return IPC_CMD_PLAY;
+    if (strcmp(line, "PAUSE")        == 0) return IPC_CMD_PAUSE;
+    if (strcmp(line, "TOGGLE")       == 0) return IPC_CMD_TOGGLE;
+    if (strcmp(line, "NEXT")         == 0) return IPC_CMD_NEXT;
+    if (strcmp(line, "PREV")         == 0) return IPC_CMD_PREV;
+    if (strcmp(line, "SHUFFLE")      == 0) return IPC_CMD_SHUFFLE;
+    if (strcmp(line, "REPEAT")       == 0) return IPC_CMD_REPEAT;
+    if (strcmp(line, "RESCAN")       == 0) return IPC_CMD_RESCAN;
+    if (strcmp(line, "RELOAD_CONFIG") == 0) return IPC_CMD_RELOAD_CONFIG;
+    if (strcmp(line, "STOP_PREVIEW") == 0) return IPC_CMD_STOP_PREVIEW;
+    if (strcmp(line, "RESUME")       == 0) return IPC_CMD_RESUME;
+    if (strcmp(line, "STATUS")       == 0) return IPC_CMD_STATUS;
+    if (strcmp(line, "QUIT")         == 0) return IPC_CMD_QUIT;
+
+    if (strncmp(line, "SELECT ", 7) == 0) {
+        if (out_int_arg) *out_int_arg = atoi(line + 7);
         return IPC_CMD_SELECT;
     }
-    if (strncmp(buf, "VOLUME ", 7) == 0) {
-        if (out_int_arg) *out_int_arg = atoi(buf + 7);
+    if (strncmp(line, "VOLUME ", 7) == 0) {
+        if (out_int_arg) *out_int_arg = atoi(line + 7);
         return IPC_CMD_VOLUME;
     }
-    if (strncmp(buf, "PLAYLIST ", 9) == 0) {
+    if (strncmp(line, "PLAYLIST ", 9) == 0) {
         if (out_str_arg && str_arg_size > 0)
-            str_copy_trunc(out_str_arg, (size_t)str_arg_size, buf + 9);
+            str_copy_trunc(out_str_arg, (size_t)str_arg_size, line + 9);
         return IPC_CMD_PLAYLIST;
     }
-    if (strncmp(buf, "PLAY_TRACK ", 11) == 0) {
+    if (strncmp(line, "PLAY_TRACK ", 11) == 0) {
         if (out_str_arg && str_arg_size > 0)
-            str_copy_trunc(out_str_arg, (size_t)str_arg_size, buf + 11);
+            str_copy_trunc(out_str_arg, (size_t)str_arg_size, line + 11);
         return IPC_CMD_PLAY_TRACK;
     }
-    if (strncmp(buf, "PREVIEW ", 8) == 0) {
+    if (strncmp(line, "PREVIEW ", 8) == 0) {
         if (out_str_arg && str_arg_size > 0)
-            str_copy_trunc(out_str_arg, (size_t)str_arg_size, buf + 8);
+            str_copy_trunc(out_str_arg, (size_t)str_arg_size, line + 8);
         return IPC_CMD_PREVIEW;
     }
 
@@ -103,9 +123,11 @@ void ipc_daemon_write_status(const ipc_status_t *st) {
     fprintf(f, "track_count=%d\n", st->track_count);
     fprintf(f, "volume=%d\n", st->volume);
     fprintf(f, "previewing=%d\n", st->previewing);
+    fprintf(f, "menu_music_enabled=%d\n", st->menu_music_enabled);
     fprintf(f, "single_track=%d\n", st->single_track);
     fprintf(f, "track_name=%s\n", st->track_name);
     fprintf(f, "playlist=%s\n", st->playlist_name);
+    fprintf(f, "preview_path=%s\n", st->preview_path);
     fclose(f);
 }
 
@@ -189,7 +211,7 @@ int ipc_client_read_status(ipc_status_t *st) {
     FILE *f = fopen(IPC_STATUS_PATH, "r");
     if (!f) return -1;
 
-    char line[512];
+    char line[1024];
     while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\n")] = '\0';
         if (sscanf(line, "playing=%d", &st->playing) == 1) continue;
@@ -199,6 +221,7 @@ int ipc_client_read_status(ipc_status_t *st) {
         if (sscanf(line, "track_count=%d", &st->track_count) == 1) continue;
         if (sscanf(line, "volume=%d", &st->volume) == 1) continue;
         if (sscanf(line, "previewing=%d", &st->previewing) == 1) continue;
+        if (sscanf(line, "menu_music_enabled=%d", &st->menu_music_enabled) == 1) continue;
         if (sscanf(line, "single_track=%d", &st->single_track) == 1) continue;
         if (strncmp(line, "track_name=", 11) == 0) {
             str_copy_trunc(st->track_name, sizeof(st->track_name), line + 11);
@@ -206,6 +229,10 @@ int ipc_client_read_status(ipc_status_t *st) {
         }
         if (strncmp(line, "playlist=", 9) == 0) {
             str_copy_trunc(st->playlist_name, sizeof(st->playlist_name), line + 9);
+            continue;
+        }
+        if (strncmp(line, "preview_path=", 13) == 0) {
+            str_copy_trunc(st->preview_path, sizeof(st->preview_path), line + 13);
             continue;
         }
     }

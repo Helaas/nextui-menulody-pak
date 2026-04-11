@@ -24,14 +24,17 @@ Supported audio formats:
 
 Menulody now has two playback modes:
 
-- `Single Song Loop`: choose a song in `Library` and press `A`. Menulody switches to that one track and loops it until you later choose a playlist source.
-- `Playlist Source`: choose `All Songs` or a saved playlist in `Playlists`. Menulody then plays from that source using shuffle and repeat settings.
+- `Single Song Loop`: choose a song in `Choose Song` and press `A`. Menulody switches to that one track and loops it until you later choose a playlist source.
+- `Playlist Source`: choose `All Songs` or a saved playlist in `Choose Playlist`. Menulody then plays from that source using the shuffle and repeat settings from `Settings`.
 
 Notes:
 
 - Saved playlists are source selectors. They are not separate in-app music players anymore.
+- Menulody remembers the selected source and the `Menu Music` on/off state across device reboots.
 - `Preview` is temporary. It does not change the active source.
-- If a preview is already playing, pressing `Y` again stops it.
+- If a preview is already playing, pressing `Y` on the same track stops it.
+- Pressing `Y` on a different track switches the preview to that track.
+- `Preview` is independent from the normal `Pause on Pak Launch` setting.
 
 ## Controls
 
@@ -43,18 +46,21 @@ Main screens follow Apostrophe / NextUI footer conventions:
 
 Important screens:
 
-- `Library`
+- `Main Menu`
+  - `Menu Music`: turn menu playback on or off
+  - `Y`: open `Details`
+- `Choose Song`
   - `A`: start single-song loop mode for the selected track
   - `Y`: preview / stop preview
-- `Now Playing`
-  - `L2`: previous track
-  - `R2`: next track
-  - `X`: shuffle
-  - `Y`: repeat
+- `Details`
+  - `L2`: previous track when a playlist source is active
+  - `R2`: next track when a playlist source is active
   - `A`: play / pause
-- `Playlists`
+- `Choose Playlist`
   - `A`: activate `All Songs` or the selected saved playlist
   - `X`: delete saved playlist
+  - `Y`: edit the selected saved playlist
+  - `+ Create New Playlist`: create a saved playlist at the end of the list
 - `Settings`
   - changes are staged locally
   - `START`: save
@@ -86,6 +92,10 @@ Saved playlists are stored here:
 
 - `.../.userdata/shared/Menulody/playlists/`
 
+Remembered playback source state is stored here:
+
+- `.../.userdata/shared/Menulody/source_state.json`
+
 ## Overlay
 
 The now-playing pill appears:
@@ -95,7 +105,7 @@ The now-playing pill appears:
 
 It does not reappear when the same song loops in repeat-one mode.
 
-This overlay is provided through `Varnish.pak`. Menulody playback still works without Varnish, but the pill will only appear when Varnish is installed and enabled.
+This overlay is provided through `Varnish.pak`. Menulody playback still works without Varnish, but the pill will only appear when Varnish is fully enabled. Menulody checks the pak, enabled marker, startup patch, boot hook, and daemon state when showing warnings in `Settings`.
 
 ## Auto Pause / Resume
 

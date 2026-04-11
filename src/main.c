@@ -18,8 +18,13 @@
 #include "ipc.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#define APP_PATH_MAX 1024
+
+static char app_binary_path[APP_PATH_MAX];
 
 #ifdef PLATFORM_MAC
 #include <limits.h>
@@ -92,6 +97,7 @@ static void print_status(void) {
     }
 
     printf("Daemon: running\n");
+    printf("Menu Music: %s\n", st.menu_music_enabled ? "ON" : "OFF");
     printf("State:  %s\n", st.previewing ? "Previewing" : st.playing ? "Playing" : "Paused");
     printf("Mode:   %s\n", st.single_track ? "Single Track Loop" : "Playlist Source");
     printf("Track:  %s (%d/%d)\n", st.track_name, st.track_index + 1, st.track_count);
@@ -109,6 +115,35 @@ static void kill_daemon(void) {
     }
     ipc_client_send(IPC_CMD_QUIT, 0);
     fprintf(stderr, "Sent QUIT to daemon\n");
+}
+
+void ui_set_app_binary_path(const char *path) {
+    if (!path || !path[0]) {
+        app_binary_path[0] = '\0';
+        return;
+    }
+
+    snprintf(app_binary_path, sizeof(app_binary_path), "%s", path);
+}
+
+int ui_start_daemon_if_needed(void) {
+    pid_t pid;
+
+    if (ipc_daemon_running()) return 0;
+    if (!app_binary_path[0]) return -1;
+
+    pid = fork();
+    if (pid < 0) {
+        perror("menulody: fork");
+        return -1;
+    }
+    if (pid == 0) {
+        execl(app_binary_path, app_binary_path, "--daemon", (char *)NULL);
+        perror("menulody: execl");
+        _exit(127);
+    }
+
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -159,6 +194,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    ui_set_app_binary_path(argv[0]);
     run_app();
 
     ap_quit();

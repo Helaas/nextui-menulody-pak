@@ -23,6 +23,7 @@ ADB ?= adb
 COMMON_INCLUDES := -I$(APOSTROPHE_DIR)/include -Ithird_party/cJSON -Ithird_party/minimp3 -Isrc
 
 .PHONY: all native mac run-mac tg5040 tg5050 my355 test test-varnish-client \
+	test-source-state \
 	package package-tg5040 package-tg5050 package-my355 do-package \
 	deploy deploy-platform clean help update-apostrophe \
 	setup-nextui-preview-cache clean-nextui-preview-cache
@@ -32,7 +33,7 @@ COMMON_INCLUDES := -I$(APOSTROPHE_DIR)/include -Ithird_party/cJSON -Ithird_party
 native: mac
 run-native: run-mac
 all: tg5040 tg5050 my355
-test: test-varnish-client
+test: test-varnish-client test-source-state
 
 # ── Submodule auto-init ────────────────────────────────────
 
@@ -66,6 +67,13 @@ test-varnish-client:
 		-o $(BUILD_DIR)/tests/varnish_client_tests \
 		tests/varnish_client_tests.c src/varnish_client.c
 	./$(BUILD_DIR)/tests/varnish_client_tests
+
+test-source-state:
+	@mkdir -p $(BUILD_DIR)/tests
+	cc -std=gnu11 -O0 -g -Wall -Wextra -Isrc -Ithird_party/cJSON \
+		-o $(BUILD_DIR)/tests/source_state_tests \
+		tests/source_state_tests.c src/source_state.c src/config.c third_party/cJSON/cJSON.c
+	./$(BUILD_DIR)/tests/source_state_tests
 
 run-mac: mac
 	./$(BUILD_DIR)/mac/$(APP_NAME)

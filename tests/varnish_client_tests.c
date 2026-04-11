@@ -23,6 +23,36 @@ static void join_path(char *out, size_t size, const char *a, const char *b) {
         fail("path overflow", __LINE__);
 }
 
+static void mkdir_p(const char *path) {
+    char buf[PATH_MAX];
+    size_t len;
+
+    join_path(buf, sizeof(buf), path, "");
+    len = strlen(buf);
+    if (len > 0 && buf[len - 1] == '/')
+        buf[len - 1] = '\0';
+
+    for (char *p = buf + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            if (mkdir(buf, 0755) != 0 && errno != EEXIST)
+                fail("mkdir_p failed", __LINE__);
+            *p = '/';
+        }
+    }
+
+    if (mkdir(buf, 0755) != 0 && errno != EEXIST)
+        fail("mkdir_p final failed", __LINE__);
+}
+
+static void write_text_file(const char *path, const char *content) {
+    FILE *f = fopen(path, "w");
+    if (!f)
+        fail("fopen write_text_file failed", __LINE__);
+    fputs(content, f);
+    fclose(f);
+}
+
 static int open_reader(const char *fifo_path) {
     int fd = open(fifo_path, O_RDONLY | O_NONBLOCK);
     if (fd < 0)
@@ -66,7 +96,17 @@ int main(void) {
     char *tmp_root = mkdtemp(tmp_template);
     char fifo_path[PATH_MAX];
     char pak_dir[PATH_MAX];
+    char userdata_dir[PATH_MAX];
+    char sdcard_dir[PATH_MAX];
+    char state_dir[PATH_MAX];
+    char enabled_path[PATH_MAX];
+    char boot_dir[PATH_MAX];
+    char boot_hook_path[PATH_MAX];
+    char startup_dir[PATH_MAX];
+    char startup_path[PATH_MAX];
     char buffer[512];
+    char status_text[256];
+    varnish_client_status_t status;
     int reader_fd;
 
     if (!tmp_root)
@@ -101,15 +141,71 @@ int main(void) {
     CHECK(setenv("VARNISH_PAK_DIR", pak_dir, 1) == 0, "setenv VARNISH_PAK_DIR failed");
     CHECK(varnish_client_is_installed(), "installed detection failed");
 
+    join_path(userdata_dir, sizeof(userdata_dir), tmp_root, "userdata");
+    join_path(sdcard_dir, sizeof(sdcard_dir), tmp_root, "sdcard");
+    CHECK(setenv("USERDATA_PATH", userdata_dir, 1) == 0, "setenv USERDATA_PATH failed");
+    CHECK(setenv("SDCARD_PATH", sdcard_dir, 1) == 0, "setenv SDCARD_PATH failed");
+    CHECK(setenv("PLATFORM", "tg5040", 1) == 0, "setenv PLATFORM failed");
+
+    join_path(state_dir, sizeof(state_dir), userdata_dir, "Varnish");
+    mkdir_p(state_dir);
+    join_path(enabled_path, sizeof(enabled_path), state_dir, "enabled");
+    write_text_file(enabled_path, "enabled\n");
+
+    join_path(boot_dir, sizeof(boot_dir), userdata_dir, ".hooks/boot.d");
+    mkdir_p(boot_dir);
+    join_path(boot_hook_path, sizeof(boot_hook_path), boot_dir, "varnish.sync.sh");
+    write_text_file(boot_hook_path, "#!/bin/sh\n");
+
+    join_path(startup_dir, sizeof(startup_dir), sdcard_dir, ".tmp_update");
+    mkdir_p(startup_dir);
+    join_path(startup_path, sizeof(startup_path), startup_dir, "tg5040.sh");
+    write_text_file(startup_path,
+                    "# >>> VARNISH STARTUP >>>\n"
+                    "test\n"
+                    "# <<< VARNISH STARTUP <<<\n");
+
+    CHECK(mkfifo(fifo_path, 0600) == 0 || errno == EEXIST, "recreate fifo failed");
+    varnish_client_get_status(&status);
+    CHECK(status.pak_installed, "status pak_installed failed");
+    CHECK(status.enabled, "status enabled failed");
+    CHECK(status.startup_installed, "status startup_installed failed");
+    CHECK(status.boot_installed, "status boot_installed failed");
+    CHECK(status.daemon_running, "status daemon_running failed");
+    CHECK(varnish_client_is_enabled(&status), "enabled aggregate failed");
+    varnish_client_format_status(&status, status_text, sizeof(status_text));
+    CHECK(strstr(status_text, "Pak: Installed") != NULL, "formatted status missing pak");
+    CHECK(strstr(status_text, "Startup patch: Installed") != NULL,
+          "formatted status missing startup");
+    unlink(enabled_path);
+    varnish_client_get_status(&status);
+    CHECK(!status.enabled, "status enabled should clear after unlink");
+    CHECK(!varnish_client_is_enabled(&status), "aggregate enabled should fail when marker missing");
+
     unsetenv("VARNISH_PAK_DIR");
     unsetenv("VARNISH_FIFO_PATH");
+    unsetenv("USERDATA_PATH");
+    unsetenv("SDCARD_PATH");
+    unsetenv("PLATFORM");
     unlink(fifo_path);
     {
         char binary_path[PATH_MAX];
         join_path(binary_path, sizeof(binary_path), pak_dir, "varnish");
         unlink(binary_path);
     }
+    unlink(boot_hook_path);
+    unlink(startup_path);
     rmdir(pak_dir);
+    rmdir(boot_dir);
+    {
+        char hooks_dir[PATH_MAX];
+        join_path(hooks_dir, sizeof(hooks_dir), userdata_dir, ".hooks");
+        rmdir(hooks_dir);
+    }
+    rmdir(startup_dir);
+    rmdir(state_dir);
+    rmdir(userdata_dir);
+    rmdir(sdcard_dir);
     rmdir(tmp_root);
 
     puts("varnish_client_tests: ok");

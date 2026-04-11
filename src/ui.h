@@ -7,6 +7,12 @@
  * Communicates with the daemon via FIFO IPC.
  */
 
+/* Cache the current app binary path so the UI can restart the daemon. */
+void ui_set_app_binary_path(const char *path);
+
+/* Start the daemon when it is not already running. */
+int ui_start_daemon_if_needed(void);
+
 /* Run the interactive UI. Returns 0 on clean exit. */
 void run_app(void);
 

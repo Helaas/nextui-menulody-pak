@@ -38,9 +38,11 @@ typedef struct {
     int    track_count;      /* total tracks */
     int    volume;           /* 0-100 */
     int    previewing;       /* 1 = preview currently playing */
+    int    menu_music_enabled; /* 1 = remembered menu music source is enabled */
     int    single_track;     /* 1 = active source is a single looping track */
     char   track_name[256];  /* display name of current track */
     char   playlist_name[128]; /* name of active playlist */
+    char   preview_path[512]; /* full path of active preview track */
 } ipc_status_t;
 
 /* Daemon side: create FIFO, open for non-blocking read */
