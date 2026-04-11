@@ -125,9 +125,10 @@ int source_state_load(source_state_t *state) {
         return -1;
     }
 
-    fread(buf, 1, (size_t)len, f);
-    buf[len] = '\0';
+    size_t nread = fread(buf, 1, (size_t)len, f);
     fclose(f);
+    if (nread < (size_t)len) { free(buf); return -1; }
+    buf[len] = '\0';
 
     root = cJSON_Parse(buf);
     free(buf);

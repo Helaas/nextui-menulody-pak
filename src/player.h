@@ -9,6 +9,7 @@
  */
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <SDL2/SDL.h>
 
 #define PLAYER_SAMPLE_RATE  44100
@@ -36,26 +37,27 @@ typedef struct {
     /* WAV-specific state */
     short              *wav_data;      /* decoded WAV PCM (interleaved stereo) */
     int                 wav_frames;    /* total frames in wav_data */
-    volatile int        wav_position;  /* current read position in frames */
+    atomic_int          wav_position;  /* current read position in frames */
 
-    /* Ring buffer: int16_t samples, interleaved stereo */
+    /* Ring buffer: int16_t samples, interleaved stereo.
+       ring_read, ring_write, and ring_count are all protected by ring_mutex. */
     short              *ring;
-    volatile int        ring_read;
-    volatile int        ring_write;
-    volatile int        ring_count;
+    int                 ring_read;
+    int                 ring_write;
+    int                 ring_count;
     pthread_mutex_t     ring_mutex;
 
     /* Decode thread */
     pthread_t           decode_thread;
-    volatile int        decode_running;
-    volatile int        decode_finished;   /* 1 when current file is fully decoded */
+    atomic_int          decode_running;
+    atomic_int          decode_finished;   /* 1 when current file is fully decoded */
 
     /* Volume: 0-100 */
-    volatile int        volume;
+    atomic_int          volume;
 
     /* State flags */
-    volatile int        playing;
-    volatile int        track_done;        /* 1 when playback of current track completed */
+    atomic_int          playing;
+    atomic_int          track_done;        /* 1 when playback of current track completed */
 } player_t;
 
 /* Initialize the player (no audio device opened yet) */

@@ -11,32 +11,36 @@
 
 /* ── Ring buffer helpers ────────────────────────────────────────── */
 
-static int ring_available(player_t *p) {
+/* Call with ring_mutex held */
+static int ring_available_locked(player_t *p) {
     return RING_BUFFER_SIZE - p->ring_count;
 }
 
-static int ring_readable(player_t *p) {
-    return p->ring_count;
+static int ring_available(player_t *p) {
+    pthread_mutex_lock(&p->ring_mutex);
+    int n = ring_available_locked(p);
+    pthread_mutex_unlock(&p->ring_mutex);
+    return n;
 }
 
 static void ring_write(player_t *p, const short *data, int count) {
+    pthread_mutex_lock(&p->ring_mutex);
     for (int i = 0; i < count; i++) {
         p->ring[p->ring_write] = data[i];
         p->ring_write = (p->ring_write + 1) % RING_BUFFER_SIZE;
     }
-    pthread_mutex_lock(&p->ring_mutex);
     p->ring_count += count;
     pthread_mutex_unlock(&p->ring_mutex);
 }
 
 static int ring_read_samples(player_t *p, short *out, int count) {
-    int avail = ring_readable(p);
+    pthread_mutex_lock(&p->ring_mutex);
+    int avail = p->ring_count;
     if (count > avail) count = avail;
     for (int i = 0; i < count; i++) {
         out[i] = p->ring[p->ring_read];
         p->ring_read = (p->ring_read + 1) % RING_BUFFER_SIZE;
     }
-    pthread_mutex_lock(&p->ring_mutex);
     p->ring_count -= count;
     pthread_mutex_unlock(&p->ring_mutex);
     return count;
@@ -50,7 +54,7 @@ static void audio_callback(void *userdata, Uint8 *stream, int len) {
     int got = ring_read_samples(p, (short *)stream, samples_needed);
 
     /* Apply volume scaling */
-    int vol = p->volume;
+    int vol = atomic_load(&p->volume);
     if (vol < 100) {
         short *buf = (short *)stream;
         for (int i = 0; i < got; i++) {
@@ -64,8 +68,12 @@ static void audio_callback(void *userdata, Uint8 *stream, int len) {
                (samples_needed - got) * (int)sizeof(short));
 
         /* If decode is finished and buffer drained, signal track done */
-        if (p->decode_finished && ring_readable(p) == 0) {
-            p->track_done = 1;
+        if (atomic_load(&p->decode_finished)) {
+            pthread_mutex_lock(&p->ring_mutex);
+            int empty = (p->ring_count == 0);
+            pthread_mutex_unlock(&p->ring_mutex);
+            if (empty)
+                atomic_store(&p->track_done, 1);
         }
     }
 }
@@ -118,7 +126,7 @@ static void *mp3_decode_thread_func(void *arg) {
     short stereo_buf[MINIMP3_MAX_SAMPLES_PER_FRAME * 2];
     short resample_buf[MINIMP3_MAX_SAMPLES_PER_FRAME * 4];
 
-    while (p->decode_running) {
+    while (atomic_load(&p->decode_running)) {
         if (ring_available(p) < MINIMP3_MAX_SAMPLES_PER_FRAME * 4) {
             usleep(10000);
             continue;
@@ -127,7 +135,7 @@ static void *mp3_decode_thread_func(void *arg) {
         size_t samples_read = mp3dec_ex_read(dec, decode_buf,
                                               MINIMP3_MAX_SAMPLES_PER_FRAME);
         if (samples_read == 0) {
-            p->decode_finished = 1;
+            atomic_store(&p->decode_finished, 1);
             break;
         }
 
@@ -163,9 +171,10 @@ static void *wav_decode_thread_func(void *arg) {
 
     /* WAV data is already fully decoded into wav_data. Feed it into
        the ring buffer in chunks. */
-    while (p->decode_running) {
-        if (p->wav_position >= p->wav_frames) {
-            p->decode_finished = 1;
+    while (atomic_load(&p->decode_running)) {
+        int pos = atomic_load(&p->wav_position);
+        if (pos >= p->wav_frames) {
+            atomic_store(&p->decode_finished, 1);
             break;
         }
 
@@ -174,12 +183,12 @@ static void *wav_decode_thread_func(void *arg) {
             continue;
         }
 
-        int frames_left = p->wav_frames - p->wav_position;
+        int frames_left = p->wav_frames - pos;
         int chunk = (frames_left < 1024) ? frames_left : 1024;
         int samples = chunk * PLAYER_CHANNELS;
 
-        ring_write(p, p->wav_data + p->wav_position * PLAYER_CHANNELS, samples);
-        p->wav_position += chunk;
+        ring_write(p, p->wav_data + pos * PLAYER_CHANNELS, samples);
+        atomic_store(&p->wav_position, pos + chunk);
     }
 
     return NULL;
@@ -302,7 +311,7 @@ static void close_audio_device(player_t *p) {
 
 int player_init(player_t *p) {
     memset(p, 0, sizeof(*p));
-    p->volume = 80; /* default volume */
+    atomic_store(&p->volume, 80); /* default volume */
     p->ring = calloc(RING_BUFFER_SIZE, sizeof(short));
     if (!p->ring) return -1;
     pthread_mutex_init(&p->ring_mutex, NULL);
@@ -343,11 +352,13 @@ int player_open(player_t *p, const char *path) {
     }
 
     /* Reset ring buffer */
+    pthread_mutex_lock(&p->ring_mutex);
     p->ring_read  = 0;
     p->ring_write = 0;
     p->ring_count = 0;
-    p->decode_finished = 0;
-    p->track_done = 0;
+    pthread_mutex_unlock(&p->ring_mutex);
+    atomic_store(&p->decode_finished, 0);
+    atomic_store(&p->track_done, 0);
 
     /* Open audio device */
     if (open_audio_device(p) < 0) {
@@ -362,7 +373,7 @@ int player_open(player_t *p, const char *path) {
     }
 
     /* Start decode thread */
-    p->decode_running = 1;
+    atomic_store(&p->decode_running, 1);
     void *(*thread_func)(void *) = (fmt == PLAYER_FORMAT_MP3)
         ? mp3_decode_thread_func
         : wav_decode_thread_func;
@@ -381,13 +392,13 @@ int player_open(player_t *p, const char *path) {
     }
 
     SDL_PauseAudioDevice(p->device, 0);
-    p->playing = 1;
+    atomic_store(&p->playing, 1);
     return 0;
 }
 
 void player_close(player_t *p) {
-    if (p->decode_running) {
-        p->decode_running = 0;
+    if (atomic_load(&p->decode_running)) {
+        atomic_store(&p->decode_running, 0);
         pthread_join(p->decode_thread, NULL);
     }
 
@@ -402,42 +413,44 @@ void player_close(player_t *p) {
     free(p->wav_data);
     p->wav_data = NULL;
     p->wav_frames = 0;
-    p->wav_position = 0;
+    atomic_store(&p->wav_position, 0);
 
     p->format = PLAYER_FORMAT_UNKNOWN;
-    p->playing = 0;
-    p->decode_finished = 0;
-    p->track_done = 0;
+    atomic_store(&p->playing, 0);
+    atomic_store(&p->decode_finished, 0);
+    atomic_store(&p->track_done, 0);
 
+    pthread_mutex_lock(&p->ring_mutex);
     p->ring_read  = 0;
     p->ring_write = 0;
     p->ring_count = 0;
+    pthread_mutex_unlock(&p->ring_mutex);
 }
 
 void player_pause(player_t *p) {
-    if (!p->playing) return;
+    if (!atomic_load(&p->playing)) return;
     close_audio_device(p);
-    p->playing = 0;
+    atomic_store(&p->playing, 0);
 }
 
 int player_resume(player_t *p) {
-    if (p->playing) return 0;
+    if (atomic_load(&p->playing)) return 0;
     if (!p->decoder && !p->wav_data) return -1;
 
     if (open_audio_device(p) < 0) return -1;
     SDL_PauseAudioDevice(p->device, 0);
-    p->playing = 1;
+    atomic_store(&p->playing, 1);
     return 0;
 }
 
 int player_track_done(const player_t *p) {
-    return p->track_done;
+    return atomic_load(&((player_t *)p)->track_done);
 }
 
 void player_set_volume(player_t *p, int vol) {
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
-    p->volume = vol;
+    atomic_store(&p->volume, vol);
 }
 
 void player_destroy(player_t *p) {

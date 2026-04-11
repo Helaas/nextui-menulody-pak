@@ -112,9 +112,10 @@ config_t config_load(void) {
 
     char *buf = malloc(len + 1);
     if (!buf) { fclose(f); return cfg; }
-    fread(buf, 1, len, f);
-    buf[len] = '\0';
+    size_t nread = fread(buf, 1, len, f);
     fclose(f);
+    if (nread < (size_t)len) { free(buf); return cfg; }
+    buf[len] = '\0';
 
     cJSON *root = cJSON_Parse(buf);
     free(buf);

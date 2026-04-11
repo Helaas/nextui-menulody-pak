@@ -323,9 +323,10 @@ int playlist_named_load(const char *name, named_playlist_t *pl) {
 
     char *buf = malloc(len + 1);
     if (!buf) { fclose(f); return -1; }
-    fread(buf, 1, len, f);
-    buf[len] = '\0';
+    size_t nread = fread(buf, 1, len, f);
     fclose(f);
+    if (nread < (size_t)len) { free(buf); return -1; }
+    buf[len] = '\0';
 
     cJSON *root = cJSON_Parse(buf);
     free(buf);

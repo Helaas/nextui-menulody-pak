@@ -13,6 +13,7 @@
 /* ── Daemon side ────────────────────────────────────────────────── */
 
 static int fifo_fd = -1;
+static int fifo_wr_fd = -1;
 
 int ipc_daemon_init(void) {
     unlink(IPC_FIFO_PATH);
@@ -32,13 +33,15 @@ int ipc_daemon_init(void) {
     if (wr < 0) {
         perror("menulody: open fifo (wr-keepalive)");
     }
-    /* intentionally leak wr fd — keeps the write-end open for daemon lifetime */
+    fifo_wr_fd = wr;
 
     return 0;
 }
 
+#define IPC_READ_BUF_SIZE 2048
+
 ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size) {
-    static char buf[2048];
+    static char buf[IPC_READ_BUF_SIZE];
     static int  buf_len = 0;
 
     if (fifo_fd < 0) return IPC_CMD_NONE;
@@ -114,7 +117,10 @@ ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size)
 }
 
 void ipc_daemon_write_status(const ipc_status_t *st) {
-    FILE *f = fopen(IPC_STATUS_PATH, "w");
+    char tmp_path[sizeof(IPC_STATUS_PATH) + 4];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", IPC_STATUS_PATH);
+
+    FILE *f = fopen(tmp_path, "w");
     if (!f) return;
     fprintf(f, "playing=%d\n", st->playing);
     fprintf(f, "shuffle=%d\n", st->shuffle);
@@ -129,9 +135,11 @@ void ipc_daemon_write_status(const ipc_status_t *st) {
     fprintf(f, "playlist=%s\n", st->playlist_name);
     fprintf(f, "preview_path=%s\n", st->preview_path);
     fclose(f);
+    rename(tmp_path, IPC_STATUS_PATH);
 }
 
 void ipc_daemon_cleanup(void) {
+    if (fifo_wr_fd >= 0) { close(fifo_wr_fd); fifo_wr_fd = -1; }
     if (fifo_fd >= 0) { close(fifo_fd); fifo_fd = -1; }
     unlink(IPC_FIFO_PATH);
     unlink(IPC_PID_PATH);

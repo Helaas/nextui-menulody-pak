@@ -9,8 +9,6 @@
 #include <unistd.h>
 #include <errno.h>
 
-#define MAX_PATH 512
-
 /* ── Path helpers ──────────────────────────────────────────────── */
 
 static void get_userdata_path(char *out, int size) {
@@ -43,7 +41,7 @@ static void get_userdata_path(char *out, int size) {
 }
 
 static void mkdirp(const char *path) {
-    char tmp[MAX_PATH];
+    char tmp[CONFIG_MAX_PATH];
     str_copy_trunc(tmp, sizeof(tmp), path);
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
@@ -56,7 +54,7 @@ static void mkdirp(const char *path) {
 }
 
 static void get_hook_dir(const char *category, char *out, int size) {
-    char ud[MAX_PATH];
+    char ud[CONFIG_MAX_PATH];
     get_userdata_path(ud, sizeof(ud));
     if (size > 0) {
         if (!ud[0] ||
@@ -115,7 +113,7 @@ static int write_script(const char *dir, const char *filename, const char *conte
     if (!dir[0]) return -1;
     mkdirp(dir);
 
-    char path[MAX_PATH];
+    char path[CONFIG_MAX_PATH];
     if (path_join(path, sizeof(path), dir, filename) != 0) return -1;
 
     FILE *f = fopen(path, "w");
@@ -132,7 +130,7 @@ static int write_script(const char *dir, const char *filename, const char *conte
 }
 
 static int remove_script(const char *dir, const char *filename) {
-    char path[MAX_PATH];
+    char path[CONFIG_MAX_PATH];
     if (!dir[0] || path_join(path, sizeof(path), dir, filename) != 0)
         return -1;
     if (unlink(path) != 0 && errno != ENOENT) {
@@ -143,7 +141,7 @@ static int remove_script(const char *dir, const char *filename) {
 }
 
 static int script_exists(const char *dir, const char *filename) {
-    char path[MAX_PATH];
+    char path[CONFIG_MAX_PATH];
     if (!dir[0] || path_join(path, sizeof(path), dir, filename) != 0)
         return 0;
     return access(path, F_OK) == 0;
@@ -152,7 +150,7 @@ static int script_exists(const char *dir, const char *filename) {
 /* ── Public API ────────────────────────────────────────────────── */
 
 int hooks_install_playback(void) {
-    char pre_dir[MAX_PATH], post_dir[MAX_PATH];
+    char pre_dir[CONFIG_MAX_PATH], post_dir[CONFIG_MAX_PATH];
     get_hook_dir("pre-launch.d", pre_dir, sizeof(pre_dir));
     get_hook_dir("post-launch.d", post_dir, sizeof(post_dir));
 
@@ -164,7 +162,7 @@ int hooks_install_playback(void) {
 }
 
 int hooks_uninstall_playback(void) {
-    char pre_dir[MAX_PATH], post_dir[MAX_PATH];
+    char pre_dir[CONFIG_MAX_PATH], post_dir[CONFIG_MAX_PATH];
     get_hook_dir("pre-launch.d", pre_dir, sizeof(pre_dir));
     get_hook_dir("post-launch.d", post_dir, sizeof(post_dir));
 
@@ -175,25 +173,25 @@ int hooks_uninstall_playback(void) {
 }
 
 int hooks_install_autostart(void) {
-    char dir[MAX_PATH];
+    char dir[CONFIG_MAX_PATH];
     get_hook_dir("boot.d", dir, sizeof(dir));
     return write_script(dir, "menulody.sh", boot_script_template);
 }
 
 int hooks_uninstall_autostart(void) {
-    char dir[MAX_PATH];
+    char dir[CONFIG_MAX_PATH];
     get_hook_dir("boot.d", dir, sizeof(dir));
     return remove_script(dir, "menulody.sh");
 }
 
 bool hooks_playback_installed(void) {
-    char dir[MAX_PATH];
+    char dir[CONFIG_MAX_PATH];
     get_hook_dir("pre-launch.d", dir, sizeof(dir));
     return script_exists(dir, "menulody.sync.sh");
 }
 
 bool hooks_autostart_installed(void) {
-    char dir[MAX_PATH];
+    char dir[CONFIG_MAX_PATH];
     get_hook_dir("boot.d", dir, sizeof(dir));
     return script_exists(dir, "menulody.sh");
 }
