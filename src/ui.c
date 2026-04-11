@@ -40,6 +40,21 @@ static ipc_status_t poll_status(void) {
     return st;
 }
 
+static ipc_status_t poll_status_fresh(void) {
+    ipc_status_t st = {0};
+
+    if (!daemon_ready()) return st;
+
+    for (int i = 0; i < 6; i++) {
+        ipc_client_send(IPC_CMD_STATUS, 0);
+        usleep(20000);
+        if (ipc_client_read_status(&st) == 0)
+            return st;
+    }
+
+    return poll_status();
+}
+
 static void show_info_message(const char *message) {
     ap_message_opts msg = {.message = message};
     ap_confirm_result dummy;
@@ -123,6 +138,19 @@ static void format_saved_source_name(const source_state_t *saved,
     }
 }
 
+static const char *preview_action_label(const ipc_status_t *st,
+                                        const char *selected_path) {
+    if (!st || !selected_path || !selected_path[0]) return "Preview";
+
+    if (st->previewing && st->preview_path[0]) {
+        if (strcmp(st->preview_path, selected_path) == 0)
+            return "Stop Preview";
+        return "Switch Preview";
+    }
+
+    return "Preview";
+}
+
 static void wait_for_menu_music_enabled(int enabled) {
     if (!daemon_ready()) return;
 
@@ -151,6 +179,23 @@ static void wait_for_playlist_source(const char *expected_name) {
             return;
 
         usleep(50000);
+    }
+}
+
+static void wait_for_preview_status(const char *path, int previewing) {
+    if (!daemon_ready()) return;
+
+    for (int i = 0; i < 20; i++) {
+        ipc_status_t st = poll_status_fresh();
+
+        if (!previewing) {
+            if (!st.previewing)
+                return;
+        } else if (st.previewing && strcmp(st.preview_path, path) == 0) {
+            return;
+        }
+
+        usleep(10000);
     }
 }
 
@@ -273,13 +318,15 @@ static void toggle_preview_for_path(const char *path) {
 
     if (!path || !path[0]) return;
     if (ensure_daemon_running() < 0) return;
-    st = poll_status();
+    st = poll_status_fresh();
 
     if (st.previewing && st.preview_path[0]
         && strcmp(st.preview_path, path) == 0) {
         ipc_client_send(IPC_CMD_STOP_PREVIEW, 0);
+        wait_for_preview_status(path, 0);
     } else {
         ipc_client_send_str(IPC_CMD_PREVIEW, path);
+        wait_for_preview_status(path, 1);
     }
 }
 
@@ -445,8 +492,10 @@ static void show_song_selector(void) {
     int last_visible = 0;
 
     for (;;) {
-        ipc_status_t st = poll_status();
-        const char *preview_label = st.previewing ? "Stop Preview" : "Preview";
+        ipc_status_t st = poll_status_fresh();
+        const char *selected_path = (last_index >= 0 && last_index < lib.count)
+            ? lib.paths[last_index] : NULL;
+        const char *preview_label = preview_action_label(&st, selected_path);
         ap_footer_item footer[] = {
             {AP_BTN_B, "Back", false, NULL},
             {AP_BTN_Y, preview_label, false, NULL},
@@ -549,8 +598,10 @@ static void show_playlist_editor(const char *playlist_name) {
     int last_visible = 0;
 
     for (;;) {
-        ipc_status_t st = poll_status();
-        const char *preview_label = st.previewing ? "Stop Preview" : "Preview";
+        ipc_status_t st = poll_status_fresh();
+        const char *selected_path = (last_index >= 0 && last_index < lib.count)
+            ? lib.paths[last_index] : NULL;
+        const char *preview_label = preview_action_label(&st, selected_path);
         ap_footer_item footer[] = {
             {AP_BTN_B, "Cancel", false, NULL},
             {AP_BTN_A, "Toggle", false, NULL},
