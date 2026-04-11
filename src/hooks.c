@@ -140,13 +140,6 @@ static int remove_script(const char *dir, const char *filename) {
     return 0;
 }
 
-static int script_exists(const char *dir, const char *filename) {
-    char path[CONFIG_MAX_PATH];
-    if (!dir[0] || path_join(path, sizeof(path), dir, filename) != 0)
-        return 0;
-    return access(path, F_OK) == 0;
-}
-
 /* ── Public API ────────────────────────────────────────────────── */
 
 int hooks_install_playback(void) {
@@ -161,39 +154,16 @@ int hooks_install_playback(void) {
     return err ? -1 : 0;
 }
 
-int hooks_uninstall_playback(void) {
-    char pre_dir[CONFIG_MAX_PATH], post_dir[CONFIG_MAX_PATH];
-    get_hook_dir("pre-launch.d", pre_dir, sizeof(pre_dir));
-    get_hook_dir("post-launch.d", post_dir, sizeof(post_dir));
-
-    int err = 0;
-    if (remove_script(pre_dir, "menulody.sync.sh") != 0) err++;
-    if (remove_script(post_dir, "menulody.sh") != 0) err++;
-    return err ? -1 : 0;
-}
-
-int hooks_install_autostart(void) {
+static int hooks_install_autostart(void) {
     char dir[CONFIG_MAX_PATH];
     get_hook_dir("boot.d", dir, sizeof(dir));
     return write_script(dir, "menulody.sh", boot_script_template);
 }
 
-int hooks_uninstall_autostart(void) {
+static int hooks_uninstall_autostart(void) {
     char dir[CONFIG_MAX_PATH];
     get_hook_dir("boot.d", dir, sizeof(dir));
     return remove_script(dir, "menulody.sh");
-}
-
-bool hooks_playback_installed(void) {
-    char dir[CONFIG_MAX_PATH];
-    get_hook_dir("pre-launch.d", dir, sizeof(dir));
-    return script_exists(dir, "menulody.sync.sh");
-}
-
-bool hooks_autostart_installed(void) {
-    char dir[CONFIG_MAX_PATH];
-    get_hook_dir("boot.d", dir, sizeof(dir));
-    return script_exists(dir, "menulody.sh");
 }
 
 int hooks_apply_config(bool auto_start) {

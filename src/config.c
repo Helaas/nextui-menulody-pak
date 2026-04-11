@@ -52,7 +52,7 @@ void config_get_playlists_dir(char *out, int size) {
         out[0] = '\0';
 }
 
-const char *config_default_music_dir(void) {
+static const char *config_default_music_dir(void) {
 #ifdef PLATFORM_MAC
     static char buf[CONFIG_MAX_PATH];
     const char *home = getenv("HOME");

@@ -117,7 +117,7 @@ static void kill_daemon(void) {
     fprintf(stderr, "Sent QUIT to daemon\n");
 }
 
-void ui_set_app_binary_path(const char *path) {
+static void set_app_binary_path(const char *path) {
     if (!path || !path[0]) {
         app_binary_path[0] = '\0';
         return;
@@ -194,7 +194,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    ui_set_app_binary_path(argv[0]);
+    set_app_binary_path(argv[0]);
     run_app();
 
     ap_quit();

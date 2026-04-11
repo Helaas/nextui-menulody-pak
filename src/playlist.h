@@ -46,9 +46,6 @@ void playlist_select(playlist_t *pl, int index);
 /* Toggle shuffle and reshuffle the order array */
 void playlist_shuffle_toggle(playlist_t *pl);
 
-/* Reshuffle without toggling (e.g., on startup if shuffle is already on) */
-void playlist_reshuffle(playlist_t *pl);
-
 /* Cycle repeat mode: off -> all -> one -> off */
 void playlist_repeat_cycle(playlist_t *pl);
 

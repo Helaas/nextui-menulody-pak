@@ -35,7 +35,4 @@ void config_get_data_dir(char *out, int size);
 /* Get the playlists directory */
 void config_get_playlists_dir(char *out, int size);
 
-/* Get default music directory */
-const char *config_default_music_dir(void);
-
 #endif /* MENULODY_CONFIG_H */

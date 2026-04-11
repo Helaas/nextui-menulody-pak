@@ -14,6 +14,8 @@
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
+static void playlist_reshuffle(playlist_t *pl);
+
 static int str_ends_with_ci(const char *s, const char *suffix) {
     size_t slen = strlen(s);
     size_t xlen = strlen(suffix);
@@ -233,7 +235,7 @@ void playlist_shuffle_toggle(playlist_t *pl) {
     }
 }
 
-void playlist_reshuffle(playlist_t *pl) {
+static void playlist_reshuffle(playlist_t *pl) {
     if (pl->count <= 1) return;
     int cur = playlist_current_index(pl);
     shuffle_order(pl->order, pl->count);
