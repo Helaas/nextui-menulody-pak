@@ -34,6 +34,7 @@ static source_state_t source_state;
 static daemon_state_t state = STATE_IDLE;
 static int          single_track_mode = 0;
 static int          ui_play_override = 0;
+static int          pak_launch_active = 0;
 
 /* Preview state */
 static daemon_state_t pre_preview_state = STATE_IDLE;
@@ -105,7 +106,7 @@ static void apply_playlist_config_from_settings(playlist_t *pl) {
 }
 
 static int playback_active_now(int menu_active) {
-    return menu_active || ui_play_override;
+    return menu_active || ui_play_override || pak_launch_active;
 }
 
 static void save_source_state(void) {
@@ -381,12 +382,18 @@ int daemon_run(void) {
 
             case IPC_CMD_PAUSE:
                 ui_play_override = 0;
+                pak_launch_active = 0;
                 if (state == STATE_PLAYING || state == STATE_PREVIEWING) {
                     player_pause(&player);
                     state = STATE_PAUSED_AUTO;
                     update_status();
-                    fprintf(stderr, "menulody: paused by hook\n");
+                    fprintf(stderr, "menulody: launch paused by hook\n");
                 }
+                break;
+
+            case IPC_CMD_PAK_LAUNCH:
+                pak_launch_active = 1;
+                fprintf(stderr, "menulody: pak launch allowed\n");
                 break;
 
             case IPC_CMD_UI_PLAY:
@@ -610,6 +617,10 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_RESUME:
+                if (pak_launch_active) {
+                    pak_launch_active = 0;
+                    fprintf(stderr, "menulody: pak launch ended, context cleared\n");
+                }
                 if (state == STATE_PAUSED_AUTO && source_state.menu_music_enabled) {
                     if (player_resume(&player) == 0) {
                         state = STATE_PLAYING;
@@ -653,7 +664,7 @@ int daemon_run(void) {
                 }
                 /* Fallback: auto-pause if menu disappeared (hooks should handle this,
                    but monitor provides a safety net) */
-                if (!menu_active && !ui_play_override) {
+                if (!menu_active && !ui_play_override && !pak_launch_active) {
                     player_pause(&player);
                     state = STATE_PAUSED_AUTO;
                     update_status();

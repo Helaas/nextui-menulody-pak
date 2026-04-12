@@ -1,6 +1,6 @@
 # Menulody
 
-Menulody is a background music pak for NextUI. It plays MP3 and WAV files while you browse the menu, pauses when you launch games or other paks, and resumes when you return.
+Menulody is a background music pak for NextUI. It plays MP3 and WAV files while you browse the menu, always pauses for ROM launches, optionally keeps playing over pak launches, and resumes when you return.
 
 ## Install
 
@@ -118,8 +118,8 @@ This overlay is provided through `Varnish.pak`. Menulody playback still works wi
 
 When Menulody is installed and run once, it installs launch hooks in userdata so it can:
 
-- pause before ROM launches
-- optionally pause before pak launches
+- always pause before ROM launches
+- only pause before pak launches when `Pause on Pak Launch` is enabled
 - resume when you return to NextUI
 
 If `Auto-Start Daemon` is enabled, Menulody also installs a boot hook so the daemon starts automatically.

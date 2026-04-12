@@ -75,15 +75,16 @@ ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size)
     if (buf_len > 0)
         memmove(buf, nl + 1, buf_len);
 
-    if (strcmp(line, "PLAY")         == 0) return IPC_CMD_PLAY;
-    if (strcmp(line, "PAUSE")        == 0) return IPC_CMD_PAUSE;
-    if (strcmp(line, "UI_PLAY")      == 0) return IPC_CMD_UI_PLAY;
-    if (strcmp(line, "UI_PAUSE")     == 0) return IPC_CMD_UI_PAUSE;
-    if (strcmp(line, "TOGGLE")       == 0) return IPC_CMD_TOGGLE;
-    if (strcmp(line, "NEXT")         == 0) return IPC_CMD_NEXT;
-    if (strcmp(line, "PREV")         == 0) return IPC_CMD_PREV;
-    if (strcmp(line, "SHUFFLE")      == 0) return IPC_CMD_SHUFFLE;
-    if (strcmp(line, "REPEAT")       == 0) return IPC_CMD_REPEAT;
+    if (strcmp(line, "PLAY")          == 0) return IPC_CMD_PLAY;
+    if (strcmp(line, "PAUSE")         == 0) return IPC_CMD_PAUSE;
+    if (strcmp(line, "PAK_LAUNCH")    == 0) return IPC_CMD_PAK_LAUNCH;
+    if (strcmp(line, "UI_PLAY")       == 0) return IPC_CMD_UI_PLAY;
+    if (strcmp(line, "UI_PAUSE")      == 0) return IPC_CMD_UI_PAUSE;
+    if (strcmp(line, "TOGGLE")        == 0) return IPC_CMD_TOGGLE;
+    if (strcmp(line, "NEXT")          == 0) return IPC_CMD_NEXT;
+    if (strcmp(line, "PREV")          == 0) return IPC_CMD_PREV;
+    if (strcmp(line, "SHUFFLE")       == 0) return IPC_CMD_SHUFFLE;
+    if (strcmp(line, "REPEAT")        == 0) return IPC_CMD_REPEAT;
     if (strcmp(line, "RESCAN")       == 0) return IPC_CMD_RESCAN;
     if (strcmp(line, "RELOAD_CONFIG") == 0) return IPC_CMD_RELOAD_CONFIG;
     if (strcmp(line, "STOP_PREVIEW") == 0) return IPC_CMD_STOP_PREVIEW;
@@ -171,21 +172,22 @@ int ipc_client_send(ipc_cmd_t cmd, int arg) {
     char buf[256];
     const char *str = NULL;
     switch (cmd) {
-        case IPC_CMD_PLAY:         str = "PLAY\n";         break;
-        case IPC_CMD_PAUSE:        str = "PAUSE\n";        break;
-        case IPC_CMD_UI_PLAY:      str = "UI_PLAY\n";      break;
-        case IPC_CMD_UI_PAUSE:     str = "UI_PAUSE\n";     break;
-        case IPC_CMD_TOGGLE:       str = "TOGGLE\n";       break;
-        case IPC_CMD_NEXT:         str = "NEXT\n";         break;
-        case IPC_CMD_PREV:         str = "PREV\n";         break;
-        case IPC_CMD_SHUFFLE:      str = "SHUFFLE\n";      break;
-        case IPC_CMD_REPEAT:       str = "REPEAT\n";       break;
-        case IPC_CMD_RESCAN:       str = "RESCAN\n";       break;
-        case IPC_CMD_RELOAD_CONFIG:str = "RELOAD_CONFIG\n"; break;
-        case IPC_CMD_STOP_PREVIEW: str = "STOP_PREVIEW\n"; break;
-        case IPC_CMD_RESUME:       str = "RESUME\n";       break;
-        case IPC_CMD_STATUS:       str = "STATUS\n";       break;
-        case IPC_CMD_QUIT:         str = "QUIT\n";         break;
+        case IPC_CMD_PLAY:          str = "PLAY\n";          break;
+        case IPC_CMD_PAUSE:         str = "PAUSE\n";         break;
+        case IPC_CMD_PAK_LAUNCH:    str = "PAK_LAUNCH\n";    break;
+        case IPC_CMD_UI_PLAY:       str = "UI_PLAY\n";       break;
+        case IPC_CMD_UI_PAUSE:      str = "UI_PAUSE\n";      break;
+        case IPC_CMD_TOGGLE:        str = "TOGGLE\n";        break;
+        case IPC_CMD_NEXT:          str = "NEXT\n";          break;
+        case IPC_CMD_PREV:          str = "PREV\n";          break;
+        case IPC_CMD_SHUFFLE:       str = "SHUFFLE\n";       break;
+        case IPC_CMD_REPEAT:        str = "REPEAT\n";        break;
+        case IPC_CMD_RESCAN:        str = "RESCAN\n";        break;
+        case IPC_CMD_RELOAD_CONFIG: str = "RELOAD_CONFIG\n"; break;
+        case IPC_CMD_STOP_PREVIEW:  str = "STOP_PREVIEW\n";  break;
+        case IPC_CMD_RESUME:        str = "RESUME\n";        break;
+        case IPC_CMD_STATUS:        str = "STATUS\n";        break;
+        case IPC_CMD_QUIT:          str = "QUIT\n";          break;
         case IPC_CMD_SELECT:
             snprintf(buf, sizeof(buf), "SELECT %d\n", arg);
             str = buf;

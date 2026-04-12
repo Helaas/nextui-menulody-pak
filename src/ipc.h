@@ -24,6 +24,7 @@ typedef enum {
     IPC_CMD_NONE = 0,
     IPC_CMD_PLAY,
     IPC_CMD_PAUSE,
+    IPC_CMD_PAK_LAUNCH,  /* allow playback to continue during a pak launch */
     IPC_CMD_UI_PLAY,      /* play current source from inside Menulody UI */
     IPC_CMD_UI_PAUSE,     /* pause current source from inside Menulody UI */
     IPC_CMD_TOGGLE,       /* play/pause */

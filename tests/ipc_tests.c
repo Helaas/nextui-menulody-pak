@@ -54,6 +54,11 @@ int main(void) {
     memset(too_long, 'b', sizeof(too_long) - 1);
     too_long[sizeof(too_long) - 1] = '\0';
 
+    CHECK(ipc_client_send(IPC_CMD_PAK_LAUNCH, 0) == 0,
+          "PAK_LAUNCH send failed");
+    cmd = read_command(&int_arg, expected, sizeof(expected));
+    CHECK(cmd == IPC_CMD_PAK_LAUNCH, "PAK_LAUNCH command not received");
+
     memset(expected, 0, sizeof(expected));
     CHECK(ipc_client_send_str(IPC_CMD_PLAY_TRACK, max_path) == 0,
           "PLAY_TRACK send failed");
