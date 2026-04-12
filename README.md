@@ -25,7 +25,7 @@ Supported audio formats:
 Menulody now has two playback modes:
 
 - `Single Song Loop`: choose a song in `Choose Song` and press `A`. Menulody switches to that one track and loops it until you later choose a playlist source.
-- `Playlist Source`: choose `All Songs` or a saved playlist in `Choose Playlist`. Menulody then plays from that source using the shuffle and repeat settings from `Settings`.
+- `Playlist Source`: choose `All Songs` or a saved playlist in `Choose Playlist`. Menulody then plays from that source using the shuffle and repeat settings from `Details`.
 
 Notes:
 
@@ -48,14 +48,15 @@ Important screens:
 
 - `Main Menu`
   - `Menu Music`: turn menu playback on or off
-  - `Y`: open `Details`
+  - `Details`: open playback info and quick controls
 - `Choose Song`
   - `A`: start single-song loop mode for the selected track
   - `Y`: preview / stop preview
 - `Details`
+  - `A`: act on the focused row
   - `L2`: previous track when a playlist source is active
   - `R2`: next track when a playlist source is active
-  - `A`: play / pause
+  - `Shuffle`, `Repeat`, and `Volume` apply immediately
 - `Choose Playlist`
   - `A`: activate `All Songs` or the selected saved playlist
   - `X`: delete saved playlist
@@ -75,12 +76,18 @@ Settings are stored in shared userdata:
 You can configure:
 
 - music folders
-- shuffle
-- repeat
-- volume
 - pause on pak launch
 - auto-start daemon at boot
 - now-playing overlay duration via `Varnish.pak`
+
+Playback details and quick controls live in `Details`:
+
+- current state
+- current source
+- current track
+- shuffle
+- repeat
+- volume
 
 Music folders are scanned recursively.
 
