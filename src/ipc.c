@@ -77,6 +77,8 @@ ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size)
 
     if (strcmp(line, "PLAY")         == 0) return IPC_CMD_PLAY;
     if (strcmp(line, "PAUSE")        == 0) return IPC_CMD_PAUSE;
+    if (strcmp(line, "UI_PLAY")      == 0) return IPC_CMD_UI_PLAY;
+    if (strcmp(line, "UI_PAUSE")     == 0) return IPC_CMD_UI_PAUSE;
     if (strcmp(line, "TOGGLE")       == 0) return IPC_CMD_TOGGLE;
     if (strcmp(line, "NEXT")         == 0) return IPC_CMD_NEXT;
     if (strcmp(line, "PREV")         == 0) return IPC_CMD_PREV;
@@ -171,6 +173,8 @@ int ipc_client_send(ipc_cmd_t cmd, int arg) {
     switch (cmd) {
         case IPC_CMD_PLAY:         str = "PLAY\n";         break;
         case IPC_CMD_PAUSE:        str = "PAUSE\n";        break;
+        case IPC_CMD_UI_PLAY:      str = "UI_PLAY\n";      break;
+        case IPC_CMD_UI_PAUSE:     str = "UI_PAUSE\n";     break;
         case IPC_CMD_TOGGLE:       str = "TOGGLE\n";       break;
         case IPC_CMD_NEXT:         str = "NEXT\n";         break;
         case IPC_CMD_PREV:         str = "PREV\n";         break;

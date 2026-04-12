@@ -33,6 +33,7 @@ static config_t     config;
 static source_state_t source_state;
 static daemon_state_t state = STATE_IDLE;
 static int          single_track_mode = 0;
+static int          ui_play_override = 0;
 
 /* Preview state */
 static daemon_state_t pre_preview_state = STATE_IDLE;
@@ -62,6 +63,7 @@ static int activate_named_source(const char *name);
 static int activate_single_track_source(const char *path);
 static int activate_saved_source_with_fallback(void);
 static void set_menu_music_enabled_state(int enabled, int menu_active);
+static int playback_active_now(int menu_active);
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
@@ -100,6 +102,10 @@ static void apply_playlist_config_from_settings(playlist_t *pl) {
     if (pl->shuffle != (config.shuffle ? 1 : 0))
         playlist_shuffle_toggle(pl);
     pl->repeat = (int)config.repeat;
+}
+
+static int playback_active_now(int menu_active) {
+    return menu_active || ui_play_override;
 }
 
 static void save_source_state(void) {
@@ -258,7 +264,7 @@ static void set_menu_music_enabled_state(int enabled, int menu_active) {
             return;
         }
 
-        if (menu_active) {
+        if (playback_active_now(menu_active)) {
             if (player_resume(&player) == 0)
                 state = STATE_PLAYING;
             else
@@ -270,6 +276,8 @@ static void set_menu_music_enabled_state(int enabled, int menu_active) {
         }
         return;
     }
+
+    ui_play_override = 0;
 
     if (source_state.menu_music_enabled) {
         source_state.menu_music_enabled = 0;
@@ -372,11 +380,26 @@ int daemon_run(void) {
                 break;
 
             case IPC_CMD_PAUSE:
+                ui_play_override = 0;
                 if (state == STATE_PLAYING || state == STATE_PREVIEWING) {
                     player_pause(&player);
                     state = STATE_PAUSED_AUTO;
                     update_status();
                     fprintf(stderr, "menulody: paused by hook\n");
+                }
+                break;
+
+            case IPC_CMD_UI_PLAY:
+                ui_play_override = 1;
+                set_menu_music_enabled_state(1, 1);
+                break;
+
+            case IPC_CMD_UI_PAUSE:
+                ui_play_override = 0;
+                if (state == STATE_PLAYING) {
+                    player_pause(&player);
+                    state = STATE_PAUSED_MANUAL;
+                    update_status();
                 }
                 break;
 
@@ -392,7 +415,7 @@ int daemon_run(void) {
                 }
                 player_close(&player);
                 if (playlist_next(&playlist) >= 0) {
-                    if (state == STATE_PLAYING || menu_active)
+                    if (state == STATE_PLAYING || playback_active_now(menu_active))
                         start_current_track();
                     else
                         update_status();
@@ -409,7 +432,7 @@ int daemon_run(void) {
                 }
                 player_close(&player);
                 playlist_prev(&playlist);
-                if (state == STATE_PLAYING || menu_active)
+                if (state == STATE_PLAYING || playback_active_now(menu_active))
                     start_current_track();
                 else
                     update_status();
@@ -422,7 +445,7 @@ int daemon_run(void) {
                 }
                 player_close(&player);
                 playlist_select(&playlist, int_arg);
-                if (state == STATE_PLAYING || menu_active)
+                if (state == STATE_PLAYING || playback_active_now(menu_active))
                     start_current_track();
                 else
                     update_status();
@@ -480,10 +503,10 @@ int daemon_run(void) {
                     if (!source_state.menu_music_enabled) {
                         state = STATE_PAUSED_MANUAL;
                         update_status();
-                    } else if (menu_active && old_state == STATE_PLAYING) {
+                    } else if (playback_active_now(menu_active) && old_state == STATE_PLAYING) {
                         start_current_track();
                     } else {
-                        state = menu_active ? STATE_IDLE : STATE_PAUSED_AUTO;
+                        state = playback_active_now(menu_active) ? STATE_IDLE : STATE_PAUSED_AUTO;
                         update_status();
                     }
                 } else {
@@ -502,7 +525,7 @@ int daemon_run(void) {
                     if (activate_all_songs_source() == 0) {
                         source_state.menu_music_enabled = 1;
                         save_source_state();
-                        if (menu_active) {
+                        if (playback_active_now(menu_active)) {
                             start_current_track();
                         } else {
                             state = STATE_PAUSED_AUTO;
@@ -518,7 +541,7 @@ int daemon_run(void) {
                     if (activate_named_source(str_arg) == 0) {
                         source_state.menu_music_enabled = 1;
                         save_source_state();
-                        if (menu_active) {
+                        if (playback_active_now(menu_active)) {
                             start_current_track();
                         } else {
                             state = STATE_PAUSED_AUTO;
@@ -540,7 +563,7 @@ int daemon_run(void) {
                 if (activate_single_track_source(str_arg) == 0) {
                     source_state.menu_music_enabled = 1;
                     save_source_state();
-                    if (menu_active) {
+                    if (playback_active_now(menu_active)) {
                         start_current_track();
                     } else {
                         state = STATE_PAUSED_AUTO;
@@ -612,7 +635,8 @@ int daemon_run(void) {
         /* State machine: auto-pause/resume based on menu */
         switch (state) {
             case STATE_IDLE:
-                if (source_state.menu_music_enabled && playlist.count > 0 && menu_active)
+                if (source_state.menu_music_enabled && playlist.count > 0
+                    && playback_active_now(menu_active))
                     start_current_track();
                 break;
 
@@ -629,7 +653,7 @@ int daemon_run(void) {
                 }
                 /* Fallback: auto-pause if menu disappeared (hooks should handle this,
                    but monitor provides a safety net) */
-                if (!menu_active) {
+                if (!menu_active && !ui_play_override) {
                     player_pause(&player);
                     state = STATE_PAUSED_AUTO;
                     update_status();
@@ -639,7 +663,7 @@ int daemon_run(void) {
 
             case STATE_PAUSED_AUTO:
                 /* Hooks will send RESUME, but monitor provides fallback */
-                if (source_state.menu_music_enabled && menu_active) {
+                if (source_state.menu_music_enabled && playback_active_now(menu_active)) {
                     if (player_resume(&player) == 0) {
                         state = STATE_PLAYING;
                     } else {

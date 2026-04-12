@@ -514,13 +514,42 @@ static void cycle_details_volume(void) {
         ipc_client_send(IPC_CMD_VOLUME, cfg.volume);
 }
 
-static void trigger_details_playback_action(void) {
-    ipc_status_t fresh = poll_status();
+static void wait_for_playback_running(int playing) {
+    if (!daemon_ready()) return;
 
-    if (fresh.previewing)
-        ipc_client_send(IPC_CMD_STOP_PREVIEW, 0);
-    else
-        toggle_menu_music();
+    for (int i = 0; i < 20; i++) {
+        ipc_status_t st = poll_status_fresh();
+        if (!st.previewing && st.playing == playing)
+            return;
+        usleep(10000);
+    }
+}
+
+static void trigger_details_playback_action(void) {
+    ipc_status_t fresh;
+
+    if (ensure_daemon_running() < 0) return;
+
+    fresh = poll_status_fresh();
+    if (fresh.previewing) {
+        if (ipc_client_send(IPC_CMD_STOP_PREVIEW, 0) < 0) {
+            show_info_message("Could not stop the current preview.");
+            return;
+        }
+        wait_for_preview_status(fresh.preview_path, 0);
+    } else if (fresh.playing) {
+        if (ipc_client_send(IPC_CMD_UI_PAUSE, 0) < 0) {
+            show_info_message("Could not pause playback.");
+            return;
+        }
+        wait_for_playback_running(0);
+    } else {
+        if (ipc_client_send(IPC_CMD_UI_PLAY, 0) < 0) {
+            show_info_message("Could not start playback.");
+            return;
+        }
+        wait_for_playback_running(1);
+    }
 }
 
 static const char *details_primary_action_label(int cursor, const ipc_status_t *st) {
