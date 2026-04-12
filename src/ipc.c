@@ -63,7 +63,7 @@ ipc_cmd_t ipc_daemon_read(int *out_int_arg, char *out_str_arg, int str_arg_size)
     if (!nl) return IPC_CMD_NONE;
 
     *nl = '\0';
-    char line[512];
+    char line[IPC_STRING_CMD_BUF_SIZE];
     size_t line_len = (size_t)(nl - buf);
     if (line_len >= sizeof(line)) line_len = sizeof(line) - 1;
     memcpy(line, buf, line_len);
@@ -197,20 +197,29 @@ int ipc_client_send(ipc_cmd_t cmd, int arg) {
 }
 
 int ipc_client_send_str(ipc_cmd_t cmd, const char *str_arg) {
-    char buf[512];
+    char buf[IPC_STRING_CMD_BUF_SIZE];
+    int written;
+
+    if (!str_arg) return -1;
+    if (strlen(str_arg) >= IPC_STRING_ARG_MAX) return -1;
+
     switch (cmd) {
         case IPC_CMD_PLAYLIST:
-            snprintf(buf, sizeof(buf), "PLAYLIST %s\n", str_arg);
+            written = snprintf(buf, sizeof(buf), "PLAYLIST %s\n", str_arg);
             break;
         case IPC_CMD_PLAY_TRACK:
-            snprintf(buf, sizeof(buf), "PLAY_TRACK %s\n", str_arg);
+            written = snprintf(buf, sizeof(buf), "PLAY_TRACK %s\n", str_arg);
             break;
         case IPC_CMD_PREVIEW:
-            snprintf(buf, sizeof(buf), "PREVIEW %s\n", str_arg);
+            written = snprintf(buf, sizeof(buf), "PREVIEW %s\n", str_arg);
             break;
         default:
             return -1;
     }
+
+    if (written < 0 || (size_t)written >= sizeof(buf))
+        return -1;
+
     return send_raw(buf);
 }
 

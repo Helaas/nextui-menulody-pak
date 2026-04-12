@@ -2,6 +2,7 @@
 #define MENULODY_PLAYLIST_H
 
 #include "config.h"
+#include <stddef.h>
 #include <stdbool.h>
 
 #define PLAYLIST_NAME_MAX 128
@@ -48,6 +49,9 @@ void playlist_shuffle_toggle(playlist_t *pl);
 
 /* Cycle repeat mode: off -> all -> one -> off */
 void playlist_repeat_cycle(playlist_t *pl);
+
+/* Validate a playlist name before it is used as a persisted filename. */
+bool playlist_name_is_valid(const char *name, char *error, size_t error_size);
 
 /* ── Named playlist CRUD (JSON files) ─────────────────────────── */
 

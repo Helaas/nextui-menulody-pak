@@ -16,6 +16,11 @@
 
 static void playlist_reshuffle(playlist_t *pl);
 
+static void set_playlist_name_error(char *error, size_t error_size, const char *message) {
+    if (!error || error_size == 0) return;
+    str_copy_trunc(error, error_size, message ? message : "");
+}
+
 static int str_ends_with_ci(const char *s, const char *suffix) {
     size_t slen = strlen(s);
     size_t xlen = strlen(suffix);
@@ -64,6 +69,35 @@ static void mkdirp(const char *path) {
         }
     }
     mkdir(tmp, 0755);
+}
+
+bool playlist_name_is_valid(const char *name, char *error, size_t error_size) {
+    if (!name || !name[0]) {
+        set_playlist_name_error(error, error_size, "Playlist name cannot be empty.");
+        return false;
+    }
+
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+        set_playlist_name_error(error, error_size,
+                                "Playlist name cannot be . or ..");
+        return false;
+    }
+
+    for (const unsigned char *p = (const unsigned char *)name; *p; p++) {
+        if (*p == '/' || *p == '\\') {
+            set_playlist_name_error(error, error_size,
+                                    "Playlist name cannot contain / or \\.");
+            return false;
+        }
+        if (iscntrl(*p)) {
+            set_playlist_name_error(error, error_size,
+                                    "Playlist name cannot contain control characters.");
+            return false;
+        }
+    }
+
+    set_playlist_name_error(error, error_size, "");
+    return true;
 }
 
 /* ── Recursive directory scan ──────────────────────────────────── */
@@ -258,15 +292,20 @@ void playlist_repeat_cycle(playlist_t *pl) {
 
 /* ── Named playlist CRUD ───────────────────────────────────────── */
 
-static void get_playlist_path(const char *name, char *out, int size) {
+static int get_playlist_path(const char *name, char *out, int size) {
     char dir[CONFIG_MAX_PATH];
+    if (size <= 0) return -1;
+    out[0] = '\0';
+    if (!playlist_name_is_valid(name, NULL, 0))
+        return -1;
     config_get_playlists_dir(dir, sizeof(dir));
-    if (size > 0) {
-        if (path_join(out, (size_t)size, dir, name) != 0 ||
-            str_append(out, (size_t)size, ".json") != 0) {
-            out[0] = '\0';
-        }
+    if (!dir[0]) return -1;
+    if (path_join(out, (size_t)size, dir, name) != 0 ||
+        str_append(out, (size_t)size, ".json") != 0) {
+        out[0] = '\0';
+        return -1;
     }
+    return 0;
 }
 
 int playlist_list_saved(char ***out_names, int *out_count) {
@@ -295,8 +334,15 @@ int playlist_list_saved(char ***out_names, int *out_count) {
             names = new_names;
         }
 
-        names[count] = strip_extension(ent->d_name);
-        if (names[count]) count++;
+        char *name = strip_extension(ent->d_name);
+        if (!name) continue;
+        if (!playlist_name_is_valid(name, NULL, 0)) {
+            free(name);
+            continue;
+        }
+
+        names[count] = name;
+        count++;
     }
 
     closedir(d);
@@ -308,12 +354,13 @@ int playlist_list_saved(char ***out_names, int *out_count) {
 }
 
 int playlist_named_load(const char *name, named_playlist_t *pl) {
+    if (!pl || !playlist_name_is_valid(name, NULL, 0)) return -1;
+
     memset(pl, 0, sizeof(*pl));
     str_copy_trunc(pl->name, sizeof(pl->name), name);
 
     char path[CONFIG_MAX_PATH];
-    get_playlist_path(name, path, sizeof(path));
-    if (!path[0]) return -1;
+    if (get_playlist_path(name, path, sizeof(path)) != 0) return -1;
 
     FILE *f = fopen(path, "r");
     if (!f) return -1;
@@ -358,13 +405,14 @@ int playlist_named_load(const char *name, named_playlist_t *pl) {
 }
 
 int playlist_named_save(const named_playlist_t *pl) {
+    if (!pl || !playlist_name_is_valid(pl->name, NULL, 0)) return -1;
+
     char dir[CONFIG_MAX_PATH];
     config_get_playlists_dir(dir, sizeof(dir));
     mkdirp(dir);
 
     char path[CONFIG_MAX_PATH];
-    get_playlist_path(pl->name, path, sizeof(path));
-    if (!path[0]) return -1;
+    if (get_playlist_path(pl->name, path, sizeof(path)) != 0) return -1;
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return -1;
@@ -402,7 +450,7 @@ int playlist_named_save(const named_playlist_t *pl) {
 
 int playlist_named_delete(const char *name) {
     char path[CONFIG_MAX_PATH];
-    get_playlist_path(name, path, sizeof(path));
+    if (get_playlist_path(name, path, sizeof(path)) != 0) return -1;
     return (unlink(path) == 0 || errno == ENOENT) ? 0 : -1;
 }
 

@@ -23,7 +23,7 @@ ADB ?= adb
 COMMON_INCLUDES := -I$(APOSTROPHE_DIR)/include -Ithird_party/cJSON -Ithird_party/minimp3 -Isrc
 
 .PHONY: all native mac run-mac tg5040 tg5050 my355 test test-varnish-client \
-	test-source-state \
+	test-source-state test-playlist test-ipc \
 	package package-tg5040 package-tg5050 package-my355 do-package \
 	deploy deploy-platform clean help update-apostrophe \
 	setup-nextui-preview-cache clean-nextui-preview-cache
@@ -33,7 +33,7 @@ COMMON_INCLUDES := -I$(APOSTROPHE_DIR)/include -Ithird_party/cJSON -Ithird_party
 native: mac
 run-native: run-mac
 all: tg5040 tg5050 my355
-test: test-varnish-client test-source-state
+test: test-varnish-client test-source-state test-playlist test-ipc
 
 # ── Submodule auto-init ────────────────────────────────────
 
@@ -74,6 +74,24 @@ test-source-state:
 		-o $(BUILD_DIR)/tests/source_state_tests \
 		tests/source_state_tests.c src/source_state.c src/config.c third_party/cJSON/cJSON.c
 	./$(BUILD_DIR)/tests/source_state_tests
+
+test-playlist:
+	@mkdir -p $(BUILD_DIR)/tests
+	cc -std=gnu11 -O0 -g -Wall -Wextra -Isrc -Ithird_party/cJSON \
+		-o $(BUILD_DIR)/tests/playlist_tests \
+		tests/playlist_tests.c src/playlist.c src/config.c third_party/cJSON/cJSON.c
+	./$(BUILD_DIR)/tests/playlist_tests
+
+test-ipc:
+	@mkdir -p $(BUILD_DIR)/tests
+	cc -std=gnu11 -O0 -g -Wall -Wextra -Isrc \
+		-DIPC_FIFO_PATH='"/tmp/menulody-ipc-test.fifo"' \
+		-DIPC_STATUS_PATH='"/tmp/menulody-ipc-test.status"' \
+		-DIPC_PID_PATH='"/tmp/menulody-ipc-test.pid"' \
+		-DIPC_LOCK_PATH='"/tmp/menulody-ipc-test.lock"' \
+		-o $(BUILD_DIR)/tests/ipc_tests \
+		tests/ipc_tests.c src/ipc.c
+	./$(BUILD_DIR)/tests/ipc_tests
 
 run-mac: mac
 	./$(BUILD_DIR)/mac/$(APP_NAME)

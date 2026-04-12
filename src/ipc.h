@@ -1,10 +1,23 @@
 #ifndef MENULODY_IPC_H
 #define MENULODY_IPC_H
 
+#include "config.h"
+
+#ifndef IPC_FIFO_PATH
 #define IPC_FIFO_PATH    "/tmp/menulody.fifo"
+#endif
+#ifndef IPC_STATUS_PATH
 #define IPC_STATUS_PATH  "/tmp/menulody_status"
+#endif
+#ifndef IPC_PID_PATH
 #define IPC_PID_PATH     "/tmp/menulody.pid"
+#endif
+#ifndef IPC_LOCK_PATH
 #define IPC_LOCK_PATH    "/tmp/menulody.lock"
+#endif
+
+#define IPC_STRING_ARG_MAX      CONFIG_MAX_PATH
+#define IPC_STRING_CMD_BUF_SIZE (sizeof("PLAY_TRACK ") + IPC_STRING_ARG_MAX + 1)
 
 /* Commands sent from UI/hooks to daemon via FIFO */
 typedef enum {
@@ -42,7 +55,7 @@ typedef struct {
     int    single_track;     /* 1 = active source is a single looping track */
     char   track_name[256];  /* display name of current track */
     char   playlist_name[128]; /* name of active playlist */
-    char   preview_path[512]; /* full path of active preview track */
+    char   preview_path[IPC_STRING_ARG_MAX]; /* full path of active preview track */
 } ipc_status_t;
 
 /* Daemon side: create FIFO, open for non-blocking read */

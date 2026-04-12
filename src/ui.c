@@ -293,8 +293,13 @@ static int save_named_playlist_selection(const char *name, const playlist_t *lib
                                          ap_list_item *items) {
     int selected = selected_track_count(items, lib ? lib->count : 0);
     named_playlist_t named = {0};
+    char validation_error[128];
 
     if (!name || !name[0] || !lib || !items) return -1;
+    if (!playlist_name_is_valid(name, validation_error, sizeof(validation_error))) {
+        show_info_message(validation_error);
+        return -1;
+    }
 
     if (selected == 0) {
         show_info_message("Select at least one track before saving.");
@@ -349,6 +354,26 @@ static void show_varnish_overlay_warning_if_needed(const config_t *cfg,
     show_info_message(message);
 }
 
+static int prompt_for_playlist_name(char *out, size_t size) {
+    char validation_error[128];
+
+    if (!out || size == 0) return -1;
+
+    for (;;) {
+        ap_keyboard_result kb_result = {0};
+        int rc = ap_keyboard("", "Playlist Name", AP_KB_GENERAL, &kb_result);
+        if (rc != AP_OK || kb_result.text[0] == '\0') return -1;
+
+        if (playlist_name_is_valid(kb_result.text,
+                                   validation_error, sizeof(validation_error))) {
+            str_copy_trunc(out, size, kb_result.text);
+            return 0;
+        }
+
+        show_info_message(validation_error);
+    }
+}
+
 static void toggle_preview_for_path(const char *path) {
     ipc_status_t st;
 
@@ -358,10 +383,16 @@ static void toggle_preview_for_path(const char *path) {
 
     if (st.previewing && st.preview_path[0]
         && strcmp(st.preview_path, path) == 0) {
-        ipc_client_send(IPC_CMD_STOP_PREVIEW, 0);
+        if (ipc_client_send(IPC_CMD_STOP_PREVIEW, 0) < 0) {
+            show_info_message("Could not stop the current preview.");
+            return;
+        }
         wait_for_preview_status(path, 0);
     } else {
-        ipc_client_send_str(IPC_CMD_PREVIEW, path);
+        if (ipc_client_send_str(IPC_CMD_PREVIEW, path) < 0) {
+            show_info_message("Could not send that preview track to the Menulody daemon.");
+            return;
+        }
         wait_for_preview_status(path, 1);
     }
 }
@@ -561,7 +592,11 @@ static void show_song_selector(void) {
             if (result.action == AP_ACTION_SELECTED) {
                 if (result.selected_index >= 0 && result.selected_index < lib.count
                     && ensure_daemon_running() == 0) {
-                    ipc_client_send_str(IPC_CMD_PLAY_TRACK, lib.paths[result.selected_index]);
+                    if (ipc_client_send_str(IPC_CMD_PLAY_TRACK,
+                                            lib.paths[result.selected_index]) < 0) {
+                        show_info_message("Could not send that track to the Menulody daemon.");
+                        continue;
+                    }
                     wait_for_single_track_source();
                     wait_for_menu_music_enabled(1);
                     break;
@@ -581,7 +616,6 @@ static void show_song_selector(void) {
 /* ── Playlists Screen ──────────────────────────────────────────── */
 
 static void show_playlist_editor(const char *playlist_name) {
-    ap_keyboard_result kb_result = {0};
     named_playlist_t existing = {0};
     char active_name[PLAYLIST_NAME_MAX] = {0};
     config_t cfg = config_load();
@@ -597,9 +631,8 @@ static void show_playlist_editor(const char *playlist_name) {
         str_copy_trunc(active_name, sizeof(active_name),
                        existing.name[0] ? existing.name : playlist_name);
     } else {
-        rc = ap_keyboard("", "Playlist Name", AP_KB_GENERAL, &kb_result);
-        if (rc != AP_OK || kb_result.text[0] == '\0') return;
-        str_copy_trunc(active_name, sizeof(active_name), kb_result.text);
+        if (prompt_for_playlist_name(active_name, sizeof(active_name)) != 0)
+            return;
     }
 
     if (playlist_scan(&lib, &cfg) < 0) {

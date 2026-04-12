@@ -358,7 +358,7 @@ int daemon_run(void) {
         /* Process all pending IPC commands */
         for (;;) {
         int int_arg = 0;
-        char str_arg[512] = {0};
+        char str_arg[IPC_STRING_ARG_MAX] = {0};
         ipc_cmd_t cmd = ipc_daemon_read(&int_arg, str_arg, sizeof(str_arg));
         if (cmd == IPC_CMD_NONE) break;
 
